@@ -512,13 +512,36 @@ private:
         finished_.store(false);
         for (auto& ch : ch_state_)
             ch = IngameFMChannelState{};
+        for (auto& p : pending_)
+            p = {};
         ym_ = std::make_unique<IngameFMChip>();
+        // Row 0: key_off (chip is silent, so no EG to worry about),
+        // then immediately commit key_on — no gap needed at startup.
         process_row(0);
+        commit_keyon();
+        // Pretend we are already past the gap so the callback doesn't fire
+        // commit_keyon() a second time for row 0.
+        sample_in_row_ = KEY_OFF_GAP_SAMPLES;
     }
 
     // -------------------------------------------------------------------------
-    // Row processing (called with audio lock implicitly held via callback)
+    // Row processing — split into two phases so the EG has time to reach zero.
+    //
+    // phase_keyoff(): issue key_off for every channel that has a new note or OFF
+    //                 coming this row. Called BEFORE generating samples.
+    // phase_keyon():  load patch, set frequency, key_on. Called AFTER a short
+    //                 gap of generated samples so the EG starts from silence.
     // -------------------------------------------------------------------------
+
+    struct PendingNote
+    {
+        bool  has_note  = false;
+        bool  is_off    = false;
+        int   midi_note = 0;
+        int   instId    = 0;
+        int   volume    = 0x7F;  // 0x00=silent, 0x7F=loudest (Furnace scale)
+    };
+    std::array<PendingNote, MAX_CHANNELS> pending_{};
 
     void process_row(int rowIdx)
     {
@@ -528,117 +551,92 @@ private:
         const IngameFMRow& row = song_.rows[rowIdx];
         int numCh = std::min(static_cast<int>(row.channels.size()), MAX_CHANNELS);
 
+        // Phase 1 — collect events, update channel state, issue key_off
         for (int ch = 0; ch < numCh; ch++)
         {
             const IngameFMEvent& ev = row.channels[ch];
+            pending_[ch] = {};
 
-            // Update instrument if specified
             if (ev.instrument >= 0)
-            {
                 ch_state_[ch].instrument = ev.instrument;
-                // Load patch into YM channel
-                if (patches_present_[ev.instrument])
-                    ym_->load_patch(patches_[ev.instrument], ch);
-            }
-
-            // Update volume if specified
-            // Furnace volume 0x00-0x7F maps to TL: lower TL = louder
-            // We store as raw furnace volume and convert:
-            //   YM TL = 127 - ingamefm_vol  (so 0x7F = loudest = TL 0)
             if (ev.volume >= 0)
                 ch_state_[ch].volume = ev.volume;
 
-            // Handle note events
             if (ev.note == NOTE_OFF)
             {
                 ym_->key_off(ch);
                 ch_state_[ch].active = false;
+                pending_[ch].is_off  = true;
             }
             else if (ev.note >= 0)
             {
-                // Key off first to retrigger
+                // Key off NOW so the EG has the inter-note sample gap to decay
                 ym_->key_off(ch);
-
-                // Apply volume: set OP TL for the output operators
-                // For simplicity, we apply volume as an overall TL offset on OP3/OP4
-                // (the "carrier" operators in most algorithms).
-                // A proper implementation would query the algorithm, but this is a
-                // good general approximation.
-                apply_volume(ch, ch_state_[ch].volume);
-
-                // Set frequency
-                double hz = IngameFMChip::midi_to_hz(ev.note);
-                ym_->set_frequency(ch, hz, 0);
-
-                // Key on
-                ym_->key_on(ch);
-                ch_state_[ch].active = true;
+                ch_state_[ch].active   = false;
+                pending_[ch].has_note  = true;
+                pending_[ch].midi_note = ev.note;
+                pending_[ch].instId    = ch_state_[ch].instrument;
+                pending_[ch].volume    = ch_state_[ch].volume;
             }
-            // NOTE_NONE: no change — channel continues as-is
         }
+        // Phase 2 (key_on) is called from audio_callback after the gap samples
     }
 
-    // Apply furnace volume (0-127) to channel ch.
-    // We modify TL of output operators based on the patch's algorithm.
-    void apply_volume(int ch, int furnaceVol)
+    // Called after KEY_OFF_GAP_SAMPLES have been generated for this row.
+    void commit_keyon()
     {
-        int instId = ch_state_[ch].instrument;
-        if (!patches_present_[instId])
-            return;
-
-        const YM2612Patch& p = patches_[instId];
-
-        // Carriers depend on algorithm. For ALG 4-7 all slots are carriers;
-        // for ALG 0-3 only OP4 (slot index 3) is a carrier.
-        // We apply a simple TL offset: TL = base_TL + (127 - furnaceVol)
-        // clamped to [0,127].
-        // This only modifies carriers (OP4 always; OP3 for ALG >= 4; etc.)
-
-        // Determine which ops are carriers for this algorithm
-        // Furnace/OPN carrier table:
-        //  ALG 0: OP4
-        //  ALG 1: OP4
-        //  ALG 2: OP4
-        //  ALG 3: OP4
-        //  ALG 4: OP2, OP4
-        //  ALG 5: OP2, OP3, OP4
-        //  ALG 6: OP2, OP3, OP4
-        //  ALG 7: OP1, OP2, OP3, OP4
-        bool isCarrier[4] = { false, false, false, false };
-        switch (p.ALG)
+        for (int ch = 0; ch < MAX_CHANNELS; ch++)
         {
-            case 0: case 1: case 2: case 3:
-                isCarrier[3] = true;
-                break;
-            case 4:
-                isCarrier[1] = true; isCarrier[3] = true;
-                break;
-            case 5: case 6:
-                isCarrier[1] = true; isCarrier[2] = true; isCarrier[3] = true;
-                break;
-            case 7:
-                isCarrier[0] = isCarrier[1] = isCarrier[2] = isCarrier[3] = true;
-                break;
-        }
-
-        const int slotMap[4] = { 0, 2, 1, 3 };
-        int volumeOffset = 127 - furnaceVol; // 0=loudest
-
-        for (int patchOp = 0; patchOp < 4; patchOp++)
-        {
-            if (!isCarrier[patchOp])
+            if (!pending_[ch].has_note)
                 continue;
 
-            int hwSlot = slotMap[patchOp];
-            int baseTL = p.op[patchOp].TL;
-            int newTL  = std::min(127, baseTL + volumeOffset / 4); // gentle scaling
-            ym_->write(0, 0x40 + hwSlot * 4 + ch, static_cast<uint8_t>(newTL & 0x7F));
+            int instId = pending_[ch].instId;
+            if (patches_present_[instId])
+            {
+                // Apply volume by scaling carrier TL on a local patch copy.
+                // Volume 0x7F = full loudness (no TL increase).
+                // Volume 0x00 = silent (maximum TL increase = 127).
+                // We work on a copy so the master patch struct is never mutated.
+                YM2612Patch p = patches_[instId];
+                int vol = pending_[ch].volume;               // 0-127
+                int tl_add = ((0x7F - vol) * 127) / 0x7F;   // 0 at full vol, 127 at silence
+
+                // Carrier flags per algorithm (OPN standard)
+                bool isCarrier[4] = { false, false, false, false };
+                switch (p.ALG)
+                {
+                    case 0: case 1: case 2: case 3:
+                        isCarrier[3] = true; break;
+                    case 4:
+                        isCarrier[1] = true; isCarrier[3] = true; break;
+                    case 5: case 6:
+                        isCarrier[1] = true; isCarrier[2] = true; isCarrier[3] = true; break;
+                    case 7:
+                        isCarrier[0] = isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
+                }
+                for (int op = 0; op < 4; op++)
+                    if (isCarrier[op])
+                        p.op[op].TL = std::min(127, p.op[op].TL + tl_add);
+
+                ym_->load_patch(p, ch);
+            }
+
+            double hz = IngameFMChip::midi_to_hz(pending_[ch].midi_note);
+            ym_->set_frequency(ch, hz, 0);
+            ym_->key_on(ch);
+            ch_state_[ch].active  = true;
+            pending_[ch].has_note = false;
         }
     }
 
     // -------------------------------------------------------------------------
     // SDL audio callback
     // -------------------------------------------------------------------------
+
+    // Samples generated after key_off before key_on (~1ms at 44100 Hz).
+    // This gives ymfm's EG enough time to reach full attenuation so the next
+    // note always starts from silence rather than mid-decay level.
+    static constexpr int KEY_OFF_GAP_SAMPLES = 44;
 
     void audio_callback(int16_t* stream, int samples)
     {
@@ -653,14 +651,25 @@ private:
 
         while (remaining > 0)
         {
-            int samples_left_in_row = samples_per_row_ - sample_in_row_;
-            int to_generate = std::min(remaining, samples_left_in_row);
+            // How many samples remain in the gap / in the row body?
+            int pos_in_row          = sample_in_row_;
+            bool in_gap             = pos_in_row < KEY_OFF_GAP_SAMPLES;
+            int gap_end             = KEY_OFF_GAP_SAMPLES;
+            int row_end             = samples_per_row_;
+
+            int next_boundary = in_gap ? gap_end : row_end;
+            int to_generate   = std::min(remaining, next_boundary - pos_in_row);
 
             ym_->generate(out, to_generate);
-            out              += to_generate * 2;
-            remaining        -= to_generate;
-            sample_in_row_   += to_generate;
+            out            += to_generate * 2;
+            remaining      -= to_generate;
+            sample_in_row_ += to_generate;
 
+            // Crossed the gap boundary → time to key_on pending notes
+            if (in_gap && sample_in_row_ >= KEY_OFF_GAP_SAMPLES)
+                commit_keyon();
+
+            // Crossed the row boundary → advance to next row
             if (sample_in_row_ >= samples_per_row_)
             {
                 sample_in_row_ = 0;
@@ -670,14 +679,16 @@ private:
                 {
                     if (loop_)
                     {
-                        // Loop: reset channel state and restart from row 0
+                        for (int ch = 0; ch < MAX_CHANNELS; ch++)
+                            ym_->key_off(ch);
                         for (auto& ch : ch_state_)
                             ch = IngameFMChannelState{};
+                        for (auto& p : pending_)
+                            p = {};
                         current_row_ = 0;
                     }
                     else
                     {
-                        // Finished: silence and key off
                         std::memset(out, 0, remaining * 4);
                         for (int ch = 0; ch < MAX_CHANNELS; ch++)
                             ym_->key_off(ch);

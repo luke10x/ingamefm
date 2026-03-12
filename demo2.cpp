@@ -1,25 +1,13 @@
 // =============================================================================
-// demo2.cpp  — ingamefm demo: looping background song + keyboard SFX
+// demo2.cpp  — ingamefm: looping background song + keyboard guitar
 //
-// - Opens an SDL window with an event loop (Esc or window-close to quit)
-// - Plays a two-channel bass/chord riff on YM2612 channels 0 and 1, looping
-// - Channel 2 is reserved for live keyboard input (lead synth)
-//   Z S X D C V G B H N J M  →  C4 C#4 D4 D#4 E4 F4 F#4 G4 G#4 A4 A#4 B4
+// Channel 0 — FM Flute melody   (instrument 0x00)
+// Channel 1 — FM Walking Bass   (instrument 0x01)
+// Channel 2 — FM Guitar, live keyboard (Z S X D C V G B H N J M -> C4-B4)
 //
-// Build (same flags as demo.cpp, just swap the source file):
-//   g++ -std=c++17 -O2 demo2.cpp \
-//       -I../bowling/build/macos/sdl2/include/ \
-//       -I../bowling/3rdparty/SDL/include \
-//       -I../my-ym2612-plugin/build/_deps/ymfm-src/src/ \
-//       ../bowling/build/macos/usr/lib/libSDL2.a \
-//       ../my-ym2612-plugin/build/_deps/ymfm-src/src/ymfm_misc.cpp \
-//       ../my-ym2612-plugin/build/_deps/ymfm-src/src/ymfm_adpcm.cpp \
-//       ../my-ym2612-plugin/build/_deps/ymfm-src/src/ymfm_ssg.cpp \
-//       ../my-ym2612-plugin/build/_deps/ymfm-src/src/ymfm_opn.cpp \
-//       -framework Cocoa -framework IOKit -framework CoreVideo -framework CoreAudio \
-//       -framework AudioToolbox -framework ForceFeedback -framework Carbon \
-//       -framework Metal -framework GameController -framework CoreHaptics \
-//       -lobjc -o demo2
+// Song: 32-row loop, tick_rate=60, speed=5 (~83ms/row, ~2.67s loop)
+//
+// Build: same flags as demo.cpp, replace source file with demo2.cpp
 // =============================================================================
 
 #include "ingamefm.h"
@@ -29,85 +17,125 @@
 // Patches
 // =============================================================================
 
-// Background: Slap Bass (channels 0-1)
-static constexpr YM2612Patch PATCH_SLAP_BASS =
+// --- FM Flute ---
+// ALG 3: OP1->OP2->OP3->OP4 chain. Soft attack, long sustain, airy tone.
+static constexpr YM2612Patch PATCH_FLUTE =
 {
-    .ALG = 4,
-    .FB  = 5,
-    .AMS = 2,
-    .FMS = 3,
-    .op =
-    {
-        { .DT = 3, .MUL = 1, .TL = 34, .RS = 0, .AR = 31, .AM = 0, .DR = 10, .SR = 6, .SL = 4, .RR = 7, .SSG = 0 },
-        { .DT = 0, .MUL = 2, .TL = 18, .RS = 1, .AR = 25, .AM = 0, .DR = 12, .SR = 5, .SL = 5, .RR = 6, .SSG = 0 },
-        { .DT = 0, .MUL = 1, .TL =  0, .RS = 0, .AR = 31, .AM = 0, .DR =  6, .SR = 3, .SL = 6, .RR = 5, .SSG = 0 },
-        { .DT = 0, .MUL = 1, .TL =  0, .RS = 0, .AR = 31, .AM = 0, .DR =  7, .SR = 2, .SL = 5, .RR = 5, .SSG = 0 }
-    }
-};
-
-// Lead: bright FM bell/lead patch on channel 2 (keyboard-triggered)
-static constexpr YM2612Patch PATCH_LEAD =
-{
-    .ALG = 5,
-    .FB  = 3,
+    .ALG = 3,
+    .FB  = 1,
     .AMS = 0,
     .FMS = 0,
     .op =
     {
-        { .DT = 1, .MUL = 1, .TL = 20, .RS = 1, .AR = 31, .AM = 0, .DR = 12, .SR = 4, .SL = 3, .RR = 8, .SSG = 0 },
-        { .DT = 0, .MUL = 2, .TL =  0, .RS = 0, .AR = 31, .AM = 0, .DR =  8, .SR = 3, .SL = 4, .RR = 6, .SSG = 0 },
-        { .DT = 2, .MUL = 1, .TL = 16, .RS = 0, .AR = 31, .AM = 0, .DR = 10, .SR = 3, .SL = 3, .RR = 7, .SSG = 0 },
-        { .DT = 0, .MUL = 1, .TL =  0, .RS = 0, .AR = 31, .AM = 0, .DR =  8, .SR = 2, .SL = 3, .RR = 6, .SSG = 0 }
+        { .DT=1, .MUL=1, .TL=38, .RS=0, .AR=28, .AM=0, .DR=10, .SR=5, .SL=5, .RR=6, .SSG=0 },
+        { .DT=0, .MUL=2, .TL=42, .RS=0, .AR=26, .AM=0, .DR=12, .SR=4, .SL=6, .RR=5, .SSG=0 },
+        { .DT=2, .MUL=1, .TL=36, .RS=0, .AR=27, .AM=0, .DR= 9, .SR=4, .SL=5, .RR=6, .SSG=0 },
+        { .DT=0, .MUL=1, .TL= 0, .RS=0, .AR=31, .AM=0, .DR= 7, .SR=3, .SL=4, .RR=7, .SSG=0 }
+    }
+};
+
+// --- FM Walking Bass ---
+// ALG 4: (OP1->OP2) + (OP3->OP4). Fast attack, short decay, punchy low-end.
+static constexpr YM2612Patch PATCH_BASS =
+{
+    .ALG = 4,
+    .FB  = 6,
+    .AMS = 0,
+    .FMS = 0,
+    .op =
+    {
+        { .DT=3, .MUL=1, .TL=32, .RS=1, .AR=31, .AM=0, .DR=12, .SR=5, .SL=4, .RR=8, .SSG=0 },
+        { .DT=0, .MUL=2, .TL= 0, .RS=1, .AR=31, .AM=0, .DR=14, .SR=4, .SL=5, .RR=7, .SSG=0 },
+        { .DT=0, .MUL=1, .TL=28, .RS=0, .AR=31, .AM=0, .DR=10, .SR=3, .SL=5, .RR=6, .SSG=0 },
+        { .DT=0, .MUL=1, .TL= 0, .RS=0, .AR=31, .AM=0, .DR= 8, .SR=2, .SL=4, .RR=6, .SSG=0 }
+    }
+};
+
+// --- FM Guitar (channel 2, keyboard-triggered) ---
+// ALG 5: OP1->(OP2, OP3, OP4). Bright pluck, classic FM electric guitar tone.
+static constexpr YM2612Patch PATCH_GUITAR =
+{
+    .ALG = 3,
+    .FB  = 7,
+    .AMS = 0,
+    .FMS = 0,
+
+    .op =
+    {
+        { .DT = 3, .MUL = 15, .TL = 61, .RS = 0, .AR = 11, .AM = 0, .DR = 0, .SR = 0, .SL = 10, .RR = 0, .SSG = 0 },
+        { .DT = 3, .MUL = 1, .TL = 4, .RS = 0, .AR = 21, .AM = 0, .DR = 18, .SR = 0, .SL = 2, .RR = 4, .SSG = 0 },
+        { .DT = -2, .MUL = 7, .TL = 19, .RS = 0, .AR = 31, .AM = 0, .DR = 31, .SR = 0, .SL = 15, .RR = 9, .SSG = 1 },
+        { .DT = 0, .MUL = 2, .TL = 6, .RS = 0, .AR = 21, .AM = 0, .DR = 5, .SR = 0, .SL = 1, .RR = 5, .SSG = 0 }
     }
 };
 
 // =============================================================================
-// Background song — two channels (ch 0 = bass, ch 1 = counter-melody)
-// 16 rows, tick_rate=60, speed=6 → ~10 rows/sec → 1.6 sec loop
-// Channel column width: note(3) + inst(2) + vol(2) = 7 chars, no effects
+// Background song — 32 rows, 2 channels
+//
+// Ch0: Flute melody  (instrument 00)
+// Ch1: Walking bass  (instrument 01)
+//
+// Column format: note(3) + inst(2) + vol(2) = 7 chars, no effects.
+// Volume 7F = full, 5F = ~75%, 40 = ~50%.
+// Note on row 26: 5F demonstrates mid-song volume change being remembered.
 // =============================================================================
 
 static const char* SONG =
-R"(org.tildearrow.furnace - Pattern Data (16)
-16
-E-2007F|C-4017F|
-.......|.......|
-G-2007F|E-4017F|
-.......|.......|
-A-2007F|G-4017F|
-.......|.......|
-G-2007F|E-4017F|
-.......|.......|
-E-2007F|C-4017F|
-.......|.......|
-D-2007F|A-3017F|
-.......|.......|
-C-2007F|G-3017F|
-.......|.......|
-D-2007F|A-3017F|
-.......|.......|
-)";
+"org.tildearrow.furnace - Pattern Data (32)\n"
+"32\n"
+"E-4007F|C-2017F|\n"
+".......|.......|\n"
+"G-4007F|.......|\n"
+".......|E-2017F|\n"
+"A-4007F|.......|\n"
+".......|.......|\n"
+"G-4007F|G-2017F|\n"
+".......|.......|\n"
+"E-4007F|C-2017F|\n"
+".......|.......|\n"
+"D-4007F|.......|\n"
+".......|A-1017F|\n"
+"C-4007F|.......|\n"
+".......|.......|\n"
+"D-4007F|G-1017F|\n"
+".......|.......|\n"
+"E-4007F|C-2017F|\n"
+".......|.......|\n"
+"G-4007F|.......|\n"
+".......|E-2017F|\n"
+"B-4007F|.......|\n"
+".......|.......|\n"
+"A-4007F|A-2017F|\n"
+".......|.......|\n"
+"G-4007F|.......|\n"
+".......|G-2017F|\n"
+"E-4005F|.......|\n"
+".......|.......|\n"
+"D-4007F|D-2017F|\n"
+".......|.......|\n"
+"C-4007F|.......|\n"
+"OFF....|OFF....|\n";
 
 // =============================================================================
-// Keyboard → MIDI note mapping  (same layout as original patchtest)
+// Keyboard -> MIDI note
 // =============================================================================
 
 static int key_to_midi(SDL_Keycode key)
 {
     switch (key)
     {
-        case SDLK_z: return 60;  // C4
-        case SDLK_s: return 61;  // C#4
-        case SDLK_x: return 62;  // D4
-        case SDLK_d: return 63;  // D#4
-        case SDLK_c: return 64;  // E4
-        case SDLK_v: return 65;  // F4
-        case SDLK_g: return 66;  // F#4
-        case SDLK_b: return 67;  // G4
-        case SDLK_h: return 68;  // G#4
-        case SDLK_n: return 69;  // A4
-        case SDLK_j: return 70;  // A#4
-        case SDLK_m: return 71;  // B4
+        case SDLK_z: return 60;
+        case SDLK_s: return 61;
+        case SDLK_x: return 62;
+        case SDLK_d: return 63;
+        case SDLK_c: return 64;
+        case SDLK_v: return 65;
+        case SDLK_g: return 66;
+        case SDLK_b: return 67;
+        case SDLK_h: return 68;
+        case SDLK_n: return 69;
+        case SDLK_j: return 70;
+        case SDLK_m: return 71;
     }
     return -1;
 }
@@ -125,12 +153,11 @@ int main(int /*argc*/, char** /*argv*/)
     }
 
     SDL_Window* window = SDL_CreateWindow(
-        "ingamefm demo2 — Z-M to play lead, Esc to quit",
+        "ingamefm demo2  |  Z-M: guitar  |  Esc: quit",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        480, 160,
+        480, 120,
         SDL_WINDOW_SHOWN
     );
-
     if (!window)
     {
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -139,16 +166,15 @@ int main(int /*argc*/, char** /*argv*/)
     }
 
     // -------------------------------------------------------------------------
-    // Set up IngameFMPlayer for the background song
+    // Set up player
     // -------------------------------------------------------------------------
 
     IngameFMPlayer player;
-
     try
     {
-        player.set_song(SONG, /*tick_rate=*/60, /*speed=*/6);
-        player.add_patch(0, PATCH_SLAP_BASS);  // instrument 0x00
-        player.add_patch(1, PATCH_LEAD);        // instrument 0x01 (ch 1 counter-melody)
+        player.set_song(SONG, /*tick_rate=*/60, /*speed=*/5);
+        player.add_patch(0x00, PATCH_FLUTE);
+        player.add_patch(0x01, PATCH_BASS);
     }
     catch (const std::exception& e)
     {
@@ -159,7 +185,7 @@ int main(int /*argc*/, char** /*argv*/)
     }
 
     // -------------------------------------------------------------------------
-    // Open a single shared SDL audio device
+    // Open shared SDL audio device
     // -------------------------------------------------------------------------
 
     SDL_AudioSpec desired{};
@@ -180,18 +206,18 @@ int main(int /*argc*/, char** /*argv*/)
         return 1;
     }
 
-    // start() creates the chip and resets state — must be called first.
-    // Audio is still paused so no lock needed yet.
+    // start() creates the chip — must happen before chip() is accessed
     player.start(dev, /*loop=*/true);
 
-    // Now chip() is valid. Load lead patch onto channel 2 before unpausing.
-    player.chip()->load_patch(PATCH_LEAD, 2);
+    // Guitar on channel 2 — audio still paused, no lock needed yet
+    player.chip()->load_patch(PATCH_GUITAR, 2);
 
     SDL_PauseAudioDevice(dev, 0);
 
     std::printf("=== ingamefm demo2 ===\n");
-    std::printf("Background song looping on channels 0-1.\n");
-    std::printf("Play lead on channel 2: Z S X D C V G B H N J M (C4-B4)\n");
+    std::printf("Ch0: FM Flute melody   (looping background)\n");
+    std::printf("Ch1: FM Walking Bass   (looping background)\n");
+    std::printf("Ch2: FM Guitar         Z S X D C V G B H N J M  (C4-B4)\n");
     std::printf("Esc or close window to quit.\n\n");
 
     // -------------------------------------------------------------------------
@@ -199,7 +225,6 @@ int main(int /*argc*/, char** /*argv*/)
     // -------------------------------------------------------------------------
 
     bool running = true;
-
     while (running)
     {
         SDL_Event e;
@@ -220,8 +245,6 @@ int main(int /*argc*/, char** /*argv*/)
                     if (midi >= 0)
                     {
                         double hz = IngameFMChip::midi_to_hz(midi);
-
-                        // Lock audio device while writing to the chip
                         SDL_LockAudioDevice(dev);
                         player.chip()->key_off(2);
                         player.chip()->set_frequency(2, hz, 0);
@@ -233,8 +256,7 @@ int main(int /*argc*/, char** /*argv*/)
 
             if (e.type == SDL_KEYUP)
             {
-                int midi = key_to_midi(e.key.keysym.sym);
-                if (midi >= 0)
+                if (key_to_midi(e.key.keysym.sym) >= 0)
                 {
                     SDL_LockAudioDevice(dev);
                     player.chip()->key_off(2);
@@ -246,13 +268,8 @@ int main(int /*argc*/, char** /*argv*/)
         SDL_Delay(1);
     }
 
-    // -------------------------------------------------------------------------
-    // Cleanup
-    // -------------------------------------------------------------------------
-
     SDL_CloseAudioDevice(dev);
     SDL_DestroyWindow(window);
     SDL_Quit();
-
     return 0;
 }
