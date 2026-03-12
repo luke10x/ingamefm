@@ -405,29 +405,19 @@ public:
     }
 
     // -------------------------------------------------------------------------
-    // Playback — call play() from your main thread.
-    // It opens SDL audio, streams the song, then returns.
+    // Playback modes
     // -------------------------------------------------------------------------
 
-    void play()
+    // play() — blocking. Opens its own SDL audio device, plays until done (or
+    // loops forever if loop=true), then closes the device and returns.
+    // Pass loop=true to repeat the song indefinitely.
+    void play(bool loop = false)
     {
         if (song_.rows.empty())
             throw std::runtime_error("No song loaded — call set_song() first");
 
-        // Reset state
-        current_row_        = 0;
-        sample_in_row_      = 0;
-        finished_           = false;
-        for (auto& ch : ch_state_)
-            ch = IngameFMChannelState{};
+        reset_state(loop);
 
-        // Reset YM chip
-        ym_ = std::make_unique<IngameFMChip>();
-
-        // Immediately process row 0 (before generating any audio)
-        process_row(current_row_);
-
-        // Open SDL audio
         SDL_AudioSpec desired{};
         desired.freq     = SAMPLE_RATE;
         desired.format   = AUDIO_S16SYS;
@@ -443,19 +433,46 @@ public:
 
         SDL_PauseAudioDevice(dev, 0);
 
-        // Wait for playback to finish
         while (!finished_.load())
             SDL_Delay(10);
 
         SDL_CloseAudioDevice(dev);
     }
 
-    // Non-blocking alternative: call update() repeatedly from your loop.
-    // You must supply your own SDL audio device opened with s_audio_callback / this.
-    // Returns true while playing, false when done.
-    bool update() { return !finished_.load(); }
+    // start() — non-blocking. Resets playback state and begins streaming into
+    // the provided (already open, already unpaused) SDL audio device.
+    // The caller owns the device and is responsible for closing it.
+    // Pass loop=true to repeat the song indefinitely.
+    void start(SDL_AudioDeviceID dev, bool loop = false)
+    {
+        if (song_.rows.empty())
+            throw std::runtime_error("No song loaded — call set_song() first");
 
-    // Expose callback for use when opening your own SDL audio device
+        SDL_LockAudioDevice(dev);
+        reset_state(loop);
+        SDL_UnlockAudioDevice(dev);
+    }
+
+    // stop() — immediately silences this player on the given device.
+    // Call with the audio device locked, or pass the device to lock internally.
+    void stop(SDL_AudioDeviceID dev)
+    {
+        SDL_LockAudioDevice(dev);
+        finished_.store(true);
+        for (int ch = 0; ch < MAX_CHANNELS; ch++)
+            if (ym_) ym_->key_off(ch);
+        SDL_UnlockAudioDevice(dev);
+    }
+
+    // is_finished() — true when the song has ended (only meaningful when not looping)
+    bool is_finished() const { return finished_.load(); }
+
+    // chip() — direct access to the YM2612 chip.
+    // Use this to play notes on channels not used by the song (e.g. ch 2 for SFX).
+    // Always call with the SDL audio device locked.
+    IngameFMChip* chip() { return ym_.get(); }
+
+    // Audio callback — wire this into SDL_AudioSpec::callback when sharing a device.
     static void s_audio_callback(void* userdata, Uint8* stream, int len)
     {
         static_cast<IngameFMPlayer*>(userdata)->audio_callback(
@@ -478,6 +495,7 @@ private:
 
     int  current_row_   = 0;
     int  sample_in_row_ = 0;
+    bool loop_          = false;
     std::atomic<bool> finished_{ false };
 
     std::array<IngameFMChannelState, MAX_CHANNELS> ch_state_{};
@@ -485,6 +503,18 @@ private:
     // Patch map
     std::array<YM2612Patch, 256>  patches_{};
     std::array<bool, 256>         patches_present_{};
+
+    void reset_state(bool loop)
+    {
+        loop_          = loop;
+        current_row_   = 0;
+        sample_in_row_ = 0;
+        finished_.store(false);
+        for (auto& ch : ch_state_)
+            ch = IngameFMChannelState{};
+        ym_ = std::make_unique<IngameFMChip>();
+        process_row(0);
+    }
 
     // -------------------------------------------------------------------------
     // Row processing (called with audio lock implicitly held via callback)
@@ -638,13 +668,22 @@ private:
 
                 if (current_row_ >= static_cast<int>(song_.rows.size()))
                 {
-                    // Song finished — silence remaining output
-                    std::memset(out, 0, remaining * 4);
-                    // Key off all channels
-                    for (int ch = 0; ch < MAX_CHANNELS; ch++)
-                        ym_->key_off(ch);
-                    finished_.store(true);
-                    return;
+                    if (loop_)
+                    {
+                        // Loop: reset channel state and restart from row 0
+                        for (auto& ch : ch_state_)
+                            ch = IngameFMChannelState{};
+                        current_row_ = 0;
+                    }
+                    else
+                    {
+                        // Finished: silence and key off
+                        std::memset(out, 0, remaining * 4);
+                        for (int ch = 0; ch < MAX_CHANNELS; ch++)
+                            ym_->key_off(ch);
+                        finished_.store(true);
+                        return;
+                    }
                 }
 
                 process_row(current_row_);

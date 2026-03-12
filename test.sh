@@ -1,5 +1,6 @@
 #!/bin/bash 
 g++ -std=c++17 \
+    -g -O0 -fno-omit-frame-pointer \
     -I../bowling/build/macos/sdl2/include/ \
     -I../bowling/3rdparty/SDL/include \
     -I../my-ym2612-plugin/build/_deps/ymfm-src/src/ \
@@ -8,7 +9,7 @@ g++ -std=c++17 \
     ../my-ym2612-plugin/build/_deps/ymfm-src/src/ymfm_adpcm.cpp \
     ../my-ym2612-plugin/build/_deps/ymfm-src/src/ymfm_ssg.cpp \
     ../my-ym2612-plugin/build/_deps/ymfm-src/src/ymfm_opn.cpp \
-    demo.cpp \
+    demo2.cpp \
     -std=c++17 \
     -framework Cocoa -framework IOKit -framework CoreVideo -framework CoreAudio -framework AudioToolbox \
     -framework ForceFeedback -framework Carbon -framework Metal -framework GameController -framework CoreHaptics \
