@@ -70,21 +70,21 @@ static const char* SONG =
 /* row 13 */ ".......|.......|\n"
 /* row 14 */ "D-4007F|.......|\n"   // Flute D4 LOUD
 /* row 15 */ ".......|.......|\n"
-/* row 16 */ "E-4006F|C-1017F|\n"   // Flute E4 MEDIUM(50) / Kick
+/* row 16 */ "E-4005F|C-1017F|\n"   // Flute E4 MEDIUM(50) / Kick
 /* row 17 */ ".......|.......|\n"
-/* row 18 */ "F#40060|.......|\n"   // Flute F#4 MEDIUM(50)
+/* row 18 */ "F#40050|.......|\n"   // Flute F#4 MEDIUM(50)
 /* row 19 */ ".......|.......|\n"
-/* row 20 */ "G-4006F|A-2027F|\n"   // Flute G4 MEDIUM / Snare
+/* row 20 */ "G-4005F|A-2027F|\n"   // Flute G4 MEDIUM / Snare
 /* row 21 */ ".......|.......|\n"
-/* row 22 */ "A-4006F|.......|\n"   // Flute A4 MEDIUM
+/* row 22 */ "A-4005F|.......|\n"   // Flute A4 MEDIUM
 /* row 23 */ ".......|.......|\n"
-/* row 24 */ "G-4006F|C-1017F|\n"   // Flute G4 QUIET(3F) / Kick
+/* row 24 */ "G-4003F|C-1017F|\n"   // Flute G4 QUIET(3F) / Kick
 /* row 25 */ ".......|.......|\n"
-/* row 26 */ "E-4006F|.......|\n"   // Flute E4 QUIET
+/* row 26 */ "E-4003F|.......|\n"   // Flute E4 QUIET
 /* row 27 */ ".......|.......|\n"
-/* row 28 */ "D-4006F|A-2027F|\n"   // Flute D4 VERY QUIET(2F) / Snare
+/* row 28 */ "D-4002F|A-2027F|\n"   // Flute D4 VERY QUIET(2F) / Snare
 /* row 29 */ ".......|.......|\n"
-/* row 30 */ "C-4006F|.......|\n"   // Flute C4 back to LOUD — surprise!
+/* row 30 */ "C-4007F|.......|\n"   // Flute C4 back to LOUD — surprise!
 /* row 31 */ "OFF....|OFF....|\n";
 
 // =============================================================================

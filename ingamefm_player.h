@@ -679,10 +679,14 @@ private:
                 {
                     if (loop_)
                     {
-                        for (int ch = 0; ch < MAX_CHANNELS; ch++)
-                            ym_->key_off(ch);
-                        for (auto& ch : ch_state_)
-                            ch = IngameFMChannelState{};
+                        // Furnace loop behaviour: just reset the cursor.
+                        // No blanket key_off — the song is responsible for
+                        // silencing channels it wants quiet at the loop point
+                        // (use an OFF event on the last row). This also means
+                        // SFX channels not owned by the song (e.g. ch2 guitar)
+                        // are never interrupted by a loop reset.
+                        // ch_state_ is also left intact so instrument/volume
+                        // memory carries across the loop boundary naturally.
                         for (auto& p : pending_)
                             p = {};
                         current_row_ = 0;
