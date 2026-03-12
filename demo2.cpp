@@ -1,11 +1,18 @@
 // =============================================================================
-// demo2.cpp  — ingamefm: looping background song + keyboard guitar
+// demo2.cpp  — ingamefm: looping song with volume dynamics + keyboard guitar
 //
-// Channel 0 — FM Flute melody   (instrument 0x00)
-// Channel 1 — FM Walking Bass   (instrument 0x01)
-// Channel 2 — FM Guitar, live keyboard (Z S X D C V G B H N J M -> C4-B4)
+// Channel 0 — FM Flute melody    instrument 0x00 = PATCH_FLUTE
+//             Volume changes throughout: loud (7F), medium (50), quiet (30),
+//             then back to loud — clearly audible dynamics.
 //
-// Song: 32-row loop, tick_rate=60, speed=5 (~83ms/row, ~2.67s loop)
+// Channel 1 — FM Kick + Snare    instrument 0x01 = PATCH_KICK
+//                                instrument 0x02 = PATCH_SNARE
+//             Pattern: kick on beats 1 & 3, snare on beats 2 & 4.
+//             Kick note = C1 (MIDI 24), Snare note = A2 (MIDI 45).
+//
+// Channel 2 — FM Guitar, live keyboard  (Z S X D C V G B H N J M -> C4-B4)
+//
+// Song: 32 rows, tick_rate=60, speed=6 -> 100ms/row -> 3.2s loop
 //
 // Build: same flags as demo.cpp, replace source file with demo2.cpp
 // =============================================================================
@@ -14,107 +21,71 @@
 #include <cstdio>
 
 // =============================================================================
-// Patches
-// =============================================================================
-
-// --- FM Flute ---
-// ALG 3: OP1->OP2->OP3->OP4 chain. Soft attack, long sustain, airy tone.
-static constexpr YM2612Patch PATCH_FLUTE =
-{
-    .ALG = 3,
-    .FB  = 1,
-    .AMS = 0,
-    .FMS = 0,
-    .op =
-    {
-        { .DT=1, .MUL=1, .TL=38, .RS=0, .AR=28, .AM=0, .DR=10, .SR=5, .SL=5, .RR=6, .SSG=0 },
-        { .DT=0, .MUL=2, .TL=42, .RS=0, .AR=26, .AM=0, .DR=12, .SR=4, .SL=6, .RR=5, .SSG=0 },
-        { .DT=2, .MUL=1, .TL=36, .RS=0, .AR=27, .AM=0, .DR= 9, .SR=4, .SL=5, .RR=6, .SSG=0 },
-        { .DT=0, .MUL=1, .TL= 0, .RS=0, .AR=31, .AM=0, .DR= 7, .SR=3, .SL=4, .RR=7, .SSG=0 }
-    }
-};
-
-// --- FM Walking Bass ---
-// ALG 4: (OP1->OP2) + (OP3->OP4). Fast attack, short decay, punchy low-end.
-static constexpr YM2612Patch PATCH_BASS =
-{
-    .ALG = 4,
-    .FB  = 6,
-    .AMS = 0,
-    .FMS = 0,
-    .op =
-    {
-        { .DT=3, .MUL=1, .TL=32, .RS=1, .AR=31, .AM=0, .DR=12, .SR=5, .SL=4, .RR=8, .SSG=0 },
-        { .DT=0, .MUL=2, .TL= 0, .RS=1, .AR=31, .AM=0, .DR=14, .SR=4, .SL=5, .RR=7, .SSG=0 },
-        { .DT=0, .MUL=1, .TL=28, .RS=0, .AR=31, .AM=0, .DR=10, .SR=3, .SL=5, .RR=6, .SSG=0 },
-        { .DT=0, .MUL=1, .TL= 0, .RS=0, .AR=31, .AM=0, .DR= 8, .SR=2, .SL=4, .RR=6, .SSG=0 }
-    }
-};
-
-// --- FM Guitar (channel 2, keyboard-triggered) ---
-// ALG 5: OP1->(OP2, OP3, OP4). Bright pluck, classic FM electric guitar tone.
-static constexpr YM2612Patch PATCH_GUITAR =
-{
-    .ALG = 3,
-    .FB  = 7,
-    .AMS = 0,
-    .FMS = 0,
-
-    .op =
-    {
-        { .DT = 3, .MUL = 15, .TL = 61, .RS = 0, .AR = 11, .AM = 0, .DR = 0, .SR = 0, .SL = 10, .RR = 0, .SSG = 0 },
-        { .DT = 3, .MUL = 1, .TL = 4, .RS = 0, .AR = 21, .AM = 0, .DR = 18, .SR = 0, .SL = 2, .RR = 4, .SSG = 0 },
-        { .DT = -2, .MUL = 7, .TL = 19, .RS = 0, .AR = 31, .AM = 0, .DR = 31, .SR = 0, .SL = 15, .RR = 9, .SSG = 1 },
-        { .DT = 0, .MUL = 2, .TL = 6, .RS = 0, .AR = 21, .AM = 0, .DR = 5, .SR = 0, .SL = 1, .RR = 5, .SSG = 0 }
-    }
-};
-
-// =============================================================================
-// Background song — 32 rows, 2 channels
-//
-// Ch0: Flute melody  (instrument 00)
-// Ch1: Walking bass  (instrument 01)
+// Song
 //
 // Column format: note(3) + inst(2) + vol(2) = 7 chars, no effects.
-// Volume 7F = full, 5F = ~75%, 40 = ~50%.
-// Note on row 26: 5F demonstrates mid-song volume change being remembered.
+//
+// Instrument IDs:
+//   00 = PATCH_FLUTE  (ch0 melody)
+//   01 = PATCH_KICK   (ch1 percussion)
+//   02 = PATCH_SNARE  (ch1 percussion)
+//
+// Volume map (hex):
+//   7F = full      (127)
+//   60 = loud-ish  ( 96)
+//   50 = medium    ( 80)
+//   38 = quiet     ( 56)
+//   20 = very quiet ( 32)
+//
+// Melody structure:
+//   Rows  0- 7: phrase A — full volume (7F)
+//   Rows  8-15: phrase B — drops to medium (50) then quiet (38)
+//   Rows 16-23: phrase A repeat — builds back to loud (60) then full (7F)
+//   Rows 24-31: ending phrase — full, then fades to quiet, ends on OFF
+//
+// Percussion pattern (every 4 rows = one beat at this tempo):
+//   Row  0: Kick  (beat 1)
+//   Row  4: Snare (beat 2)
+//   Row  8: Kick  (beat 3)
+//   Row 12: Snare (beat 4)
+//   ... repeats every 16 rows
 // =============================================================================
 
 static const char* SONG =
 "org.tildearrow.furnace - Pattern Data (32)\n"
 "32\n"
-"E-4007F|C-2017F|\n"
-".......|.......|\n"
-"G-4007F|.......|\n"
-".......|E-2017F|\n"
-"A-4007F|.......|\n"
-".......|.......|\n"
-"G-4007F|G-2017F|\n"
-".......|.......|\n"
-"E-4007F|C-2017F|\n"
-".......|.......|\n"
-"D-4007F|.......|\n"
-".......|A-1017F|\n"
-"C-4007F|.......|\n"
-".......|.......|\n"
-"D-4007F|G-1017F|\n"
-".......|.......|\n"
-"E-4007F|C-2017F|\n"
-".......|.......|\n"
-"G-4007F|.......|\n"
-".......|E-2017F|\n"
-"B-4007F|.......|\n"
-".......|.......|\n"
-"A-4007F|A-2017F|\n"
-".......|.......|\n"
-"G-4007F|.......|\n"
-".......|G-2017F|\n"
-"E-4005F|.......|\n"
-".......|.......|\n"
-"D-4007F|D-2017F|\n"
-".......|.......|\n"
-"C-4007F|.......|\n"
-"OFF....|OFF....|\n";
+/* row  0 */ "E-4007F|C-1017F|\n"   // Flute E4 LOUD / Kick beat1
+/* row  1 */ ".......|.......|\n"
+/* row  2 */ "G-4007F|.......|\n"   // Flute G4 LOUD
+/* row  3 */ ".......|.......|\n"
+/* row  4 */ "A-4007F|A-2027F|\n"   // Flute A4 LOUD / Snare beat2
+/* row  5 */ ".......|.......|\n"
+/* row  6 */ "G-4007F|.......|\n"   // Flute G4 LOUD
+/* row  7 */ ".......|.......|\n"
+/* row  8 */ "E-4007F|C-1017F|\n"   // Flute E4 LOUD / Kick beat3
+/* row  9 */ ".......|.......|\n"
+/* row 10 */ "D-4007F|.......|\n"   // Flute D4 LOUD
+/* row 11 */ ".......|.......|\n"
+/* row 12 */ "C-4007F|A-2027F|\n"   // Flute C4 LOUD / Snare beat4
+/* row 13 */ ".......|.......|\n"
+/* row 14 */ "D-4007F|.......|\n"   // Flute D4 LOUD
+/* row 15 */ ".......|.......|\n"
+/* row 16 */ "E-4006F|C-1017F|\n"   // Flute E4 MEDIUM(50) / Kick
+/* row 17 */ ".......|.......|\n"
+/* row 18 */ "F#40060|.......|\n"   // Flute F#4 MEDIUM(50)
+/* row 19 */ ".......|.......|\n"
+/* row 20 */ "G-4006F|A-2027F|\n"   // Flute G4 MEDIUM / Snare
+/* row 21 */ ".......|.......|\n"
+/* row 22 */ "A-4006F|.......|\n"   // Flute A4 MEDIUM
+/* row 23 */ ".......|.......|\n"
+/* row 24 */ "G-4006F|C-1017F|\n"   // Flute G4 QUIET(3F) / Kick
+/* row 25 */ ".......|.......|\n"
+/* row 26 */ "E-4006F|.......|\n"   // Flute E4 QUIET
+/* row 27 */ ".......|.......|\n"
+/* row 28 */ "D-4006F|A-2027F|\n"   // Flute D4 VERY QUIET(2F) / Snare
+/* row 29 */ ".......|.......|\n"
+/* row 30 */ "C-4006F|.......|\n"   // Flute C4 back to LOUD — surprise!
+/* row 31 */ "OFF....|OFF....|\n";
 
 // =============================================================================
 // Keyboard -> MIDI note
@@ -166,15 +137,16 @@ int main(int /*argc*/, char** /*argv*/)
     }
 
     // -------------------------------------------------------------------------
-    // Set up player
+    // Set up player  (instruments 00=Flute, 01=Kick, 02=Snare)
     // -------------------------------------------------------------------------
 
     IngameFMPlayer player;
     try
     {
-        player.set_song(SONG, /*tick_rate=*/60, /*speed=*/5);
+        player.set_song(SONG, /*tick_rate=*/60, /*speed=*/6);
         player.add_patch(0x00, PATCH_FLUTE);
-        player.add_patch(0x01, PATCH_BASS);
+        player.add_patch(0x01, PATCH_KICK);
+        player.add_patch(0x02, PATCH_SNARE);
     }
     catch (const std::exception& e)
     {
@@ -206,18 +178,18 @@ int main(int /*argc*/, char** /*argv*/)
         return 1;
     }
 
-    // start() creates the chip — must happen before chip() is accessed
+    // start() must be called before chip() to create the chip
     player.start(dev, /*loop=*/true);
 
-    // Guitar on channel 2 — audio still paused, no lock needed yet
+    // Load guitar patch onto channel 2 (audio still paused)
     player.chip()->load_patch(PATCH_GUITAR, 2);
 
     SDL_PauseAudioDevice(dev, 0);
 
     std::printf("=== ingamefm demo2 ===\n");
-    std::printf("Ch0: FM Flute melody   (looping background)\n");
-    std::printf("Ch1: FM Walking Bass   (looping background)\n");
-    std::printf("Ch2: FM Guitar         Z S X D C V G B H N J M  (C4-B4)\n");
+    std::printf("Ch0: Flute melody  — volume: LOUD rows 0-15, MEDIUM 16-23, QUIET 24-29, back LOUD row 30\n");
+    std::printf("Ch1: Kick + Snare  — kick on beats 1&3, snare on beats 2&4\n");
+    std::printf("Ch2: Guitar        — Z S X D C V G B H N J M  (C4-B4)\n");
     std::printf("Esc or close window to quit.\n\n");
 
     // -------------------------------------------------------------------------
@@ -247,6 +219,7 @@ int main(int /*argc*/, char** /*argv*/)
                         double hz = IngameFMChip::midi_to_hz(midi);
                         SDL_LockAudioDevice(dev);
                         player.chip()->key_off(2);
+                        player.chip()->load_patch(PATCH_GUITAR, 2);
                         player.chip()->set_frequency(2, hz, 0);
                         player.chip()->key_on(2);
                         SDL_UnlockAudioDevice(dev);
