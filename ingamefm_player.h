@@ -1,4 +1,5 @@
 #pragma once
+#include <sstream>
 // =============================================================================
 // ingamefm_player.h  — part of ingamefm (header-only)
 //
@@ -652,7 +653,4 @@ private:
     }
 };
 
-// =============================================================================
-// istringstream helper (needed for parse_ingamefm_song)
-// =============================================================================
-#include <sstream>
+
