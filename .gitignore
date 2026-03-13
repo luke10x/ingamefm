@@ -1,3 +1,5 @@
 /demo
 /*.dSYM/
 /webdemo/
+.DS_Store
+/webdemo.zip

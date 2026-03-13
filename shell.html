@@ -39,7 +39,6 @@
       left: 50%;
       transform: translateX(-50%);
 
-      /* semi-transparent dark card */
       background: rgba(0, 0, 0, 0.62);
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
@@ -47,17 +46,14 @@
       border-radius: 14px;
 
       padding: 18px 28px 16px;
-      max-width: 520px;
-      width: calc(100vw - 48px);   /* never touches screen edges on mobile */
+      max-width: 560px;
+      width: calc(100vw - 48px);
 
       color: #e8e8e8;
       font-size: 13px;
       line-height: 1.65;
 
-      /* sit above the canvas */
       z-index: 10;
-
-      /* subtle entrance animation */
       animation: fadeUp 0.6s ease both;
     }
 
@@ -71,7 +67,7 @@
       font-weight: bold;
       letter-spacing: 0.08em;
       text-transform: uppercase;
-      color: #7ef7c8;           /* aurora green accent */
+      color: #7ef7c8;
       margin-bottom: 10px;
     }
 
@@ -95,19 +91,12 @@
       flex-shrink: 0;
     }
 
-    #info .desc {
-      color: #c0c0c0;
-    }
+    #info .desc { color: #c0c0c0; }
 
     #info .divider {
       border: none;
       border-top: 1px solid rgba(255,255,255,0.10);
       margin: 10px 0;
-    }
-
-    #info .muted {
-      color: #777;
-      font-size: 11px;
     }
 
     /* close button */
@@ -126,14 +115,99 @@
     }
     #info-close:hover { color: #fff; }
 
-    /* ── Emscripten progress / status bar (keep but style it) ── */
+    /* ── Log console inside the panel ── */
+    #log-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    #log-header span {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: #7ef7c8;
+    }
+
+    #log-clear {
+      background: none;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 4px;
+      color: #888;
+      font-size: 10px;
+      font-family: 'Courier New', monospace;
+      cursor: pointer;
+      padding: 1px 7px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    #log-clear:hover { color: #fff; border-color: rgba(255,255,255,0.4); }
+
+    #log-output {
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 8px 10px;
+      height: 130px;
+      overflow-y: auto;
+      font-size: 11px;
+      line-height: 1.55;
+      /* custom scrollbar */
+      scrollbar-width: thin;
+      scrollbar-color: rgba(126,247,200,0.3) transparent;
+    }
+    #log-output::-webkit-scrollbar { width: 4px; }
+    #log-output::-webkit-scrollbar-thumb {
+      background: rgba(126,247,200,0.3);
+      border-radius: 2px;
+    }
+
+    /* one log line */
+    .log-line {
+      display: flex;
+      gap: 8px;
+      padding: 1px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      word-break: break-all;
+    }
+    .log-line:last-child { border-bottom: none; }
+
+    .log-ts {
+      color: #444;
+      flex-shrink: 0;
+      user-select: none;
+    }
+
+    .log-tag {
+      flex-shrink: 0;
+      width: 36px;
+      text-align: center;
+      border-radius: 3px;
+      font-size: 10px;
+      padding: 0 3px;
+      user-select: none;
+    }
+
+    .log-msg { color: #ccc; flex: 1; }
+
+    /* level colours */
+    .lvl-log  .log-tag { background: rgba(100,180,255,0.15); color: #64b4ff; }
+    .lvl-warn .log-tag { background: rgba(255,200,60,0.15);  color: #ffc83c; }
+    .lvl-warn .log-msg { color: #ffc83c; }
+    .lvl-err  .log-tag { background: rgba(255,80,80,0.18);   color: #ff5050; }
+    .lvl-err  .log-msg { color: #ff5050; }
+    .lvl-wasm .log-tag { background: rgba(126,247,200,0.15); color: #7ef7c8; }
+    .lvl-wasm .log-msg { color: #a8fde0; }
+    .lvl-perf .log-tag { background: rgba(200,160,255,0.15); color: #c8a0ff; }
+    .lvl-perf .log-msg { color: #c8a0ff; }
+
+    /* ── Loading overlay ── */
     #status {
       position: fixed;
       top: 12px; left: 50%;
       transform: translateX(-50%);
       z-index: 20;
       color: rgba(200,200,200,0.7);
-      font-family: 'Courier New', monospace;
       font-size: 12px;
       pointer-events: none;
       transition: opacity 0.4s;
@@ -153,16 +227,11 @@
 </head>
 <body>
 
-  <!-- Loading progress bar -->
   <div id="progress" style="width:0%"></div>
-
-  <!-- Status text -->
   <div id="status">Loading…</div>
 
-  <!-- WebGL canvas — Emscripten SDL2 targets id="canvas" by default -->
   <canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
 
-  <!-- Floating help panel -->
   <div id="info">
     <button id="info-close" title="Dismiss">✕</button>
     <h2>🎹 ingamefm aurora</h2>
@@ -171,7 +240,6 @@
       <span class="kbd">Z S X D C V G B H N J M</span>
       <span class="desc">Play guitar — white &amp; black keys C4 → B4</span>
     </div>
-
     <div class="row" style="margin-top:6px">
       <span class="kbd">🖱 Click &amp; hold</span>
       <span class="desc">Play a random guitar note — release to stop</span>
@@ -186,22 +254,130 @@
 
     <hr class="divider" />
 
-    <div class="muted">Frame-time &amp; FPS stats printed to browser console every 5 s — open DevTools to see them.</div>
+    <!-- Log panel -->
+    <div id="log-header">
+      <span>📋 console</span>
+      <button id="log-clear">clear</button>
+    </div>
+    <div id="log-output"></div>
   </div>
 
   <script>
-    // ── Dismiss button ──
+    // =========================================================================
+    // LOG PANEL
+    // Intercepts console.log/warn/error before Emscripten loads so every
+    // message — including wasm print() calls — appears in the panel.
+    // =========================================================================
+
+    var logOutput  = document.getElementById('log-output');
+    var MAX_LINES  = 60;
+    var logLines   = 0;
+    var startTime  = Date.now();
+
+    function appendLog(level, args) {
+      // Format args the same way the real console would
+      var msg = Array.prototype.slice.call(args).map(function(a) {
+        if (typeof a === 'object') {
+          try { return JSON.stringify(a); } catch(e) { return String(a); }
+        }
+        return String(a);
+      }).join(' ');
+
+      // Detect perf lines (contain "avg" and "fps" — from our C++ PerfCounter)
+      var isPerfLine = /avg.*ms.*fps/i.test(msg);
+
+      var ts = ((Date.now() - startTime) / 1000).toFixed(2);
+
+      var levelClass = isPerfLine ? 'lvl-perf'
+                     : level === 'warn' ? 'lvl-warn'
+                     : level === 'error' ? 'lvl-err'
+                     : level === 'wasm' ? 'lvl-wasm'
+                     : 'lvl-log';
+
+      var tagText = isPerfLine ? 'perf'
+                  : level === 'warn' ? 'warn'
+                  : level === 'error' ? 'err'
+                  : level === 'wasm' ? 'wasm'
+                  : 'log';
+
+      var line = document.createElement('div');
+      line.className = 'log-line ' + levelClass;
+      line.innerHTML =
+        '<span class="log-ts">' + ts + 's</span>' +
+        '<span class="log-tag">' + tagText + '</span>' +
+        '<span class="log-msg">' + escapeHtml(msg) + '</span>';
+
+      logOutput.appendChild(line);
+      logLines++;
+
+      // Evict oldest line when over the cap
+      if (logLines > MAX_LINES) {
+        logOutput.removeChild(logOutput.firstChild);
+        logLines--;
+      }
+
+      // Auto-scroll to bottom only if already near the bottom
+      var threshold = 40;
+      var atBottom  = logOutput.scrollHeight - logOutput.scrollTop
+                      - logOutput.clientHeight < threshold;
+      if (atBottom) logOutput.scrollTop = logOutput.scrollHeight;
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/&/g,'&amp;')
+              .replace(/</g,'&lt;')
+              .replace(/>/g,'&gt;');
+    }
+
+    // ── Intercept console methods (keep originals for DevTools too) ──
+    var _origLog   = console.log.bind(console);
+    var _origWarn  = console.warn.bind(console);
+    var _origError = console.error.bind(console);
+
+    console.log = function() {
+      _origLog.apply(console, arguments);
+      appendLog('log', arguments);
+    };
+    console.warn = function() {
+      _origWarn.apply(console, arguments);
+      appendLog('warn', arguments);
+    };
+    console.error = function() {
+      _origError.apply(console, arguments);
+      appendLog('error', arguments);
+    };
+
+    // ── Clear button ──
+    document.getElementById('log-clear').addEventListener('click', function() {
+      logOutput.innerHTML = '';
+      logLines = 0;
+    });
+
+    // ── Dismiss panel ──
     document.getElementById('info-close').addEventListener('click', function() {
       document.getElementById('info').style.display = 'none';
     });
 
-    // ── Emscripten module config ──
-    var Module = {
-      canvas: (function() { return document.getElementById('canvas'); })(),
+    // =========================================================================
+    // CANVAS + EMSCRIPTEN MODULE
+    // =========================================================================
 
-      // Resize canvas to match CSS (full viewport) each frame
+    function resizeCanvas() {
+      var canvas = document.getElementById('canvas');
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    document.getElementById('canvas').addEventListener('contextmenu',
+      function(e) { e.preventDefault(); });
+
+    var Module = {
+      canvas: document.getElementById('canvas'),
+
       setStatus: function(text) {
-        var el = document.getElementById('status');
+        var el  = document.getElementById('status');
         var bar = document.getElementById('progress');
         if (!text) {
           el.classList.add('hidden');
@@ -209,11 +385,9 @@
           return;
         }
         el.textContent = text;
-        // parse "x/y" progress if present
         var m = text.match(/\((\d+(\.\d+)?)\/(\d+)\)/);
         if (m) {
-          var pct = (parseFloat(m[1]) / parseFloat(m[3])) * 100;
-          bar.style.width = pct + '%';
+          bar.style.width = (parseFloat(m[1]) / parseFloat(m[3]) * 100) + '%';
         }
       },
 
@@ -223,33 +397,26 @@
 
       onRuntimeInitialized: function() {
         Module.setStatus('');
-        // Make canvas fill the window at pixel-exact resolution
         resizeCanvas();
+        console.log('wasm runtime ready');
       },
 
-      // Pass SDL2 the actual pixel size so it doesn't default to 300×150
-      arguments: [],
+      // Route wasm stdout/stderr through our log panel
+      print: function(text) {
+        // Still call original console.log (already intercepted above) but
+        // tag it as wasm so the panel colours it differently
+        _origLog('[wasm]', text);
+        appendLog('wasm', [text]);
+      },
+      printErr: function(text) {
+        _origWarn('[wasm]', text);
+        appendLog('warn', ['[wasm] ' + text]);
+      },
 
-      print: function(text)    { console.log('[wasm]', text); },
-      printErr: function(text) { console.warn('[wasm]', text); }
+      arguments: []
     };
-
-    // ── Keep canvas pixel-size in sync with window size ──
-    function resizeCanvas() {
-      var canvas = document.getElementById('canvas');
-      canvas.width  = window.innerWidth;
-      canvas.height = window.innerHeight;
-    }
-
-    window.addEventListener('resize', resizeCanvas);
-    resizeCanvas();
-
-    // ── Prevent right-click context menu on canvas ──
-    document.getElementById('canvas').addEventListener('contextmenu',
-      function(e) { e.preventDefault(); });
   </script>
 
-  <!-- Emscripten injects the compiled JS bundle here -->
   {{{ SCRIPT }}}
 
 </body>
