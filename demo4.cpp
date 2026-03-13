@@ -41,8 +41,10 @@
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <string>
 
 #include "ingamefm.h"
+#include "ingamefm_patch_serializer.h"
 
 // =============================================================================
 // 2. GLSL
@@ -315,10 +317,36 @@ struct ModImgui
 
 static constexpr int NUM_PATCHES = PATCH_CATALOGUE_SIZE;
 
+// Name used when serializing — can be anything, parser ignores it
+static constexpr const char* SERIALIZE_NAME = "MY_PATCH";
+
 struct PatchEditorState
 {
     YM2612Patch editPatches[NUM_PATCHES];
     int         selectedIdx = 0;
+    bool        lfoEnable   = false;
+    int         lfoFreq     = 0;   // 0-7
+
+    // ── Tab state ────────────────────────────────────────────────────────────
+    // 0 = Designer  1 = Code
+    int  activeTab = 0;
+
+    // ── Code editor ──────────────────────────────────────────────────────────
+    static constexpr int CODE_BUF_SIZE = 8192;
+    char codeBuf[CODE_BUF_SIZE] = {};
+
+    // Snapshot of patch+lfo at the moment Code tab was entered (or last Apply).
+    // "Restore" reverts to this.
+    YM2612Patch savedPatch;
+    bool        savedLfoEnable = false;
+    int         savedLfoFreq   = 0;
+    bool        hasSaved       = false; // false until first Code tab visit
+
+    // Error state — cleared on successful apply
+    bool codeHasError  = false;
+    char codeError[256] = {};
+    int  codeErrLine   = 0;
+    int  codeErrCol    = 0;
 
     void init()
     {
@@ -327,6 +355,71 @@ struct PatchEditorState
     }
 
     YM2612Patch& current() { return editPatches[selectedIdx]; }
+
+    // Regenerate codeBuf from current patch state.
+    void refreshCodeBuf()
+    {
+        std::string s = IngameFMSerializer::serialize(
+            current(), SERIALIZE_NAME,
+            0, lfoEnable ? 1 : 0, lfoFreq);
+        snprintf(codeBuf, CODE_BUF_SIZE, "%s", s.c_str());
+        codeHasError = false;
+        codeError[0] = '\0';
+        codeErrLine  = 0;
+        codeErrCol   = 0;
+    }
+
+    // Try to parse codeBuf into patch+lfo. Returns true on success.
+    // On success: current patch and lfo fields are updated, savedPatch is snapped.
+    // On failure: codeHasError/codeError/codeErrLine/codeErrCol are set.
+    bool tryApplyCode()
+    {
+        YM2612Patch outPatch{};
+        int  outBlock = 0, outLfoEn = 0, outLfoFreq = 0;
+        std::string err;
+        int errLine = 0, errCol = 0;
+
+        bool ok = IngameFMSerializer::parse(
+            std::string(codeBuf),
+            outPatch, outBlock, outLfoEn, outLfoFreq,
+            err, errLine, errCol);
+
+        if (ok)
+        {
+            current()  = outPatch;
+            lfoEnable  = (outLfoEn != 0);
+            lfoFreq    = outLfoFreq;
+            // Snap saved state
+            savedPatch     = current();
+            savedLfoEnable = lfoEnable;
+            savedLfoFreq   = lfoFreq;
+            hasSaved       = true;
+            codeHasError   = false;
+            codeError[0]   = '\0';
+        }
+        else
+        {
+            codeHasError = true;
+            snprintf(codeError, sizeof(codeError), "%s", err.c_str());
+            codeErrLine  = errLine;
+            codeErrCol   = errCol;
+        }
+        return ok;
+    }
+
+    // Restore code buffer + patch to last saved snapshot, clear error.
+    void restoreToSaved()
+    {
+        if (!hasSaved) return;
+        current()  = savedPatch;
+        lfoEnable  = savedLfoEnable;
+        lfoFreq    = savedLfoFreq;
+        refreshCodeBuf();   // regenerate from restored patch, clears error
+        // re-snap so codeBuf matches saved exactly
+        savedPatch     = current();
+        savedLfoEnable = lfoEnable;
+        savedLfoFreq   = lfoFreq;
+    }
 };
 
 // =============================================================================
@@ -404,6 +497,10 @@ static void syncPatches_locked(AppState& app)
     const YM2612Patch& real   = app.editor.current();
     YM2612Patch        silent = makeSilent(real);
 
+    // LFO — global chip register, apply every sync
+    app.player.chip()->enable_lfo(app.editor.lfoEnable,
+                                  (uint8_t)app.editor.lfoFreq);
+
     // Player map: ch0 → inst 0x00, ch1 → inst 0x01
     app.player.add_patch(0x00, app.muted[0] ? silent : real);
     app.player.add_patch(0x01, app.muted[1] ? silent : real);
@@ -424,9 +521,226 @@ static void pushPatch(AppState& app)
 static void applyMute(AppState& app) { pushPatch(app); }
 
 // =============================================================================
-// 11. IMGUI PATCH EDITOR
-//
-// Returns true if any parameter changed this frame.
+// 11. VISUAL INDICATORS
+// =============================================================================
+
+// Operator colors (one per op, matching classic FM editor convention)
+static const ImU32 OP_COLORS[4] = {
+    IM_COL32(100, 200, 255, 255),  // OP1 — cyan-blue
+    IM_COL32(120, 255, 140, 255),  // OP2 — green
+    IM_COL32(255, 210,  80, 255),  // OP3 — amber
+    IM_COL32(255, 110, 110, 255),  // OP4 — red
+};
+
+// Draw the algorithm topology diagram into a region starting at `p0` of size `sz`.
+// Uses ImDrawList directly. Ops are small filled squares labeled 1-4.
+// Carrier ops have an arrow going to an "out" marker on the right.
+static void drawAlgoIndicator(ImDrawList* dl, ImVec2 p0, ImVec2 sz, int algo)
+{
+    float bx = p0.x, by = p0.y, uw = sz.x, uh = sz.y;
+    const float opSz = 10.0f;   // half-size of op square
+    const ImU32 lineCol = IM_COL32(180,180,180,200);
+    const ImU32 outCol  = IM_COL32(100,255,160,255);
+    const float th = 1.5f;
+
+    // Draw a modulation line from (x1,y1) to (x2,y2)
+    auto ln = [&](float x1, float y1, float x2, float y2){
+        dl->AddLine(ImVec2(x1,y1), ImVec2(x2,y2), lineCol, th);
+    };
+    // Draw output line + filled dot
+    auto out = [&](float x1, float y1, float x2, float /*y2*/){
+        dl->AddLine(ImVec2(x1,y1), ImVec2(x2,y1), outCol, th);
+        dl->AddCircleFilled(ImVec2(x2,y1), 3.5f, outCol);
+    };
+    // Draw one op box + number label
+    auto drawOp = [&](float cx, float cy, int num, bool isFirstMod = false){
+        ImU32 col = OP_COLORS[num-1];
+        ImU32 bg  = IM_COL32(30,30,40,220);
+        dl->AddRectFilled(ImVec2(cx-opSz,cy-opSz), ImVec2(cx+opSz,cy+opSz), bg);
+        dl->AddRect      (ImVec2(cx-opSz,cy-opSz), ImVec2(cx+opSz,cy+opSz),
+                         isFirstMod ? IM_COL32(255,255,255,180) : col, 2.f, 0, 1.5f);
+        char buf[2] = { (char)('0'+num), 0 };
+        // Centre the single digit
+        ImVec2 ts = ImGui::CalcTextSize(buf);
+        dl->AddText(ImVec2(cx - ts.x*0.5f, cy - ts.y*0.5f), col, buf);
+    };
+
+    switch (algo) {
+    case 0: {
+        float sp=uw/4.8f, y=by+uh/2,
+              x1=bx+sp*.5f, x2=bx+sp*1.5f, x3=bx+sp*2.5f, x4=bx+sp*3.5f, x5=bx+sp*4.2f;
+        ln(x1+opSz,y, x2-opSz,y); ln(x2+opSz,y, x3-opSz,y); ln(x3+opSz,y, x4-opSz,y);
+        out(x4+opSz,y, x5+opSz,y);
+        drawOp(x1,y,1,true); drawOp(x2,y,2); drawOp(x3,y,3); drawOp(x4,y,4); break; }
+    case 1: {
+        float x1=bx+uw*.20f, x3=bx+uw*.40f, x4=bx+uw*.60f, x5=bx+uw*0.75f,
+              y1=by+uh*.3f, y2=by+uh*.7f, ym=by+uh*.5f;
+        ln(x1+opSz,y1, x3-opSz,ym); ln(x1+opSz,y2, x3-opSz,ym);
+        ln(x3+opSz,ym, x4-opSz,ym); out(x4+opSz,ym, x5+opSz,ym);
+        drawOp(x1,y1,1,true); drawOp(x1,y2,2); drawOp(x3,ym,3); drawOp(x4,ym,4); break; }
+    case 2: {
+        float x1=bx+uw*.20f, x3=bx+uw*.40f, x4=bx+uw*.60f, x5=bx+uw*.75f,
+              y1=by+uh*.3f, y2=by+uh*.7f, ym=by+uh*.5f;
+        ln(x1+opSz,y1, x3+opSz,y1); ln(x3+opSz,y1, x4-opSz,ym);
+        ln(x1+opSz,y2, x3-opSz,y2); ln(x3+opSz,y2, x4-opSz,ym);
+        out(x4+opSz,ym, x5+opSz,ym);
+        drawOp(x1,y1,1,true); drawOp(x1,y2,2); drawOp(x3,y2,3); drawOp(x4,ym,4); break; }
+    case 3: {
+        float x1=bx+uw*.2f, x2=bx+uw*.4f, x4=bx+uw*.6f, x5=bx+uw*.75f,
+              y1=by+uh*.3f, y3=by+uh*.7f, ym=by+uh*.5f;
+        ln(x1+opSz,y1, x2-opSz,y1); ln(x2+opSz,y1, x4-opSz,ym);
+        ln(x1+opSz,y3, x2+opSz,y3); ln(x2+opSz,y3, x4-opSz,ym);
+        out(x4+opSz,ym, x5+opSz,ym);
+        drawOp(x1,y1,1,true); drawOp(x2,y1,2); drawOp(x1,y3,3); drawOp(x4,ym,4); break; }
+    case 4: {
+        float x1=bx+uw*.2f, x2=bx+uw*.5f, x3=bx+uw*.75f,
+              y1=by+uh*.33f, ym=by+uh*.5f, y2=by+uh*.66f;
+        ln(x1+opSz,y1, x2-opSz,y1); out(x2+opSz,y1, x3+opSz,ym);
+        ln(x1+opSz,y2, x2-opSz,y2); out(x2+opSz,y2, x3+opSz,ym);
+        drawOp(x1,y1,1,true); drawOp(x2,y1,2); drawOp(x1,y2,3); drawOp(x2,y2,4); break; }
+    case 5: {
+        float x1=bx+uw*.25f, x2=bx+uw*.5f, x3=bx+uw*.75f,
+              y1=by+uh*.25f, y2=by+uh*.5f, y3=by+uh*.75f;
+        ln(x1+opSz,y2, x2-opSz,y1); out(x2+opSz,y1, x3+opSz,y2);
+        ln(x1+opSz,y2, x2-opSz,y2); out(x2+opSz,y2, x3+opSz,y2);
+        ln(x1+opSz,y2, x2-opSz,y3); out(x2+opSz,y3, x3+opSz,y2);
+        drawOp(x1,y2,1,true); drawOp(x2,y1,2); drawOp(x2,y2,3); drawOp(x2,y3,4); break; }
+    case 6: {
+        float x1=bx+uw*.25f, x2=bx+uw*.5f, x3=bx+uw*.75f,
+              y1=by+uh*.25f, y2=by+uh*.5f, y3=by+uh*.75f;
+        ln(x1+opSz,y1, x2-opSz,y1); out(x2+opSz,y1, x3+opSz,y2);
+        out(x2+opSz,y2, x3+opSz,y2); out(x2+opSz,y3, x3+opSz,y2);
+        drawOp(x1,y1,1,true); drawOp(x2,y1,2); drawOp(x2,y2,3); drawOp(x2,y3,4); break; }
+    case 7: {
+        float sp=uw/5.f, y=by+uh*.4f, yOut=by+uh*.75f, xOut=bx+uw*.5f;
+        float x1=bx+sp, x2=bx+sp*2, x3=bx+sp*3, x4=bx+sp*4;
+        dl->AddLine(ImVec2(x1,y+opSz), ImVec2(xOut,yOut), lineCol, th);
+        dl->AddLine(ImVec2(x2,y+opSz), ImVec2(xOut,yOut), lineCol, th);
+        dl->AddLine(ImVec2(x3,y+opSz), ImVec2(xOut,yOut), lineCol, th);
+        dl->AddLine(ImVec2(x4,y+opSz), ImVec2(xOut,yOut), lineCol, th);
+        dl->AddCircleFilled(ImVec2(xOut,yOut), 4.f, outCol);
+        drawOp(x1,y,1,true); drawOp(x2,y,2); drawOp(x3,y,3); drawOp(x4,y,4); break; }
+    default: break;
+    }
+}
+
+// Draw SSG-EG waveform indicator into region (p0, sz).
+// ssg: 0=off, 1-8=modes 0-7 (matching our field convention).
+// Waveforms translated from JUCE path code — same shapes.
+static void drawSsgIndicator(ImDrawList* dl, ImVec2 p0, ImVec2 sz, int ssg, ImU32 col)
+{
+    float x1 = p0.x + 2, x2 = p0.x + sz.x - 2;
+    float yBot = p0.y + sz.y - 2, yTop = p0.y + 2;
+    float w = x2 - x1;
+
+    if (ssg == 0) {
+        // Off — draw a dim dash
+        float ym = p0.y + sz.y * 0.5f;
+        dl->AddLine(ImVec2(x1, ym), ImVec2(x2, ym), IM_COL32(80,80,80,200), 1.5f);
+        return;
+    }
+
+    int mode = ssg - 1;   // convert to 0-7
+    float sw = w / 4.f;   // segment width
+
+    // Build polyline points
+    ImVec2 pts[16];
+    int    npts = 0;
+    auto P = [&](float x, float y){ pts[npts++] = ImVec2(x, y); };
+
+    switch (mode) {
+    case 0: // sawtooth down repeat
+        P(x1,yBot); P(x1,yTop); P(x1+sw,yBot); P(x1+sw,yTop);
+        P(x1+sw*2,yBot); P(x1+sw*2,yTop); P(x1+sw*3,yBot); P(x1+sw*3,yTop);
+        P(x1+sw*4,yBot); break;
+    case 1: // single down
+        P(x1,yBot); P(x1,yTop); P(x1+sw,yBot); P(x1+sw*4,yBot); break;
+    case 2: // down-up alternating
+        P(x1,yBot); P(x1,yTop); P(x1+sw,yBot);
+        P(x1+sw*2,yTop); P(x1+sw*3,yBot); P(x1+sw*4,yTop); break;
+    case 3: // down then hold high
+        P(x1,yBot); P(x1,yTop); P(x1+sw,yBot); P(x1+sw,yTop); P(x1+sw*4,yTop); break;
+    case 4: // sawtooth up repeat
+        P(x1,yBot); P(x1+sw,yTop); P(x1+sw,yBot); P(x1+sw*2,yTop);
+        P(x1+sw*2,yBot); P(x1+sw*3,yTop); P(x1+sw*3,yBot); P(x1+sw*4,yTop); break;
+    case 5: // single up then hold
+        P(x1,yBot); P(x1+sw,yTop); P(x1+sw*4,yTop); break;
+    case 6: // up-down alternating
+        P(x1,yBot); P(x1+sw,yTop); P(x1+sw*2,yBot);
+        P(x1+sw*3,yTop); P(x1+sw*4,yBot); break;
+    case 7: // up then hold low
+        P(x1,yBot); P(x1+sw,yTop); P(x1+sw,yBot); P(x1+sw*4,yBot); break;
+    }
+
+    if (npts >= 2)
+        dl->AddPolyline(pts, npts, col, 0, 1.5f);
+}
+
+// Draw ADSR envelope visualizer into region (p0, sz) for one operator.
+static void drawEnvelopeIndicator(ImDrawList* dl, ImVec2 p0, ImVec2 sz,
+                                  const YM2612Operator& o, ImU32 col)
+{
+    float x0 = p0.x + 1, y0 = p0.y + 1;
+    float w  = sz.x - 2, h = sz.y - 2;
+    float yTop = y0 + 2, yBot = y0 + h - 2;
+
+    // Dim background
+    dl->AddRectFilled(p0, ImVec2(p0.x+sz.x, p0.y+sz.y), IM_COL32(20,20,30,180));
+    dl->AddRect(p0, ImVec2(p0.x+sz.x, p0.y+sz.y),
+                (col & 0x00FFFFFFu) | IM_COL32(0,0,0,80));
+
+    // Rate→width: high rate = near-vertical = narrow segment.
+    // maxRate must match the hardware range (31 for AR/DR/SR, 15 for RR).
+    auto rateW = [&](int rate, int maxRate, float base) -> float {
+        float r = rate / (float)maxRate;
+        float curve = r*r*r;
+        return base * (1.f - curve * 0.95f);
+    };
+
+    float sl = 1.f - o.SL / 15.f,  // SL 0=loud→top, 15=silent→bottom
+          sr = o.SR / 31.f;
+
+    float ySL   = yTop + (yBot - yTop) * (1.f - sl);
+    float wAtk  = rateW(o.AR, 31, w * 0.18f);
+    float wDec  = rateW(o.DR, 31, w * 0.18f);
+    float wSus  = (w * 0.40f) * (1.f - sr) + 3.f * sr;
+    float wRel  = rateW(o.RR, 15, w * 0.28f);
+
+    // Envelope line
+    float cx = x0;
+    ImVec2 env[6];
+    env[0] = ImVec2(cx, yBot);   cx += wAtk;
+    env[1] = ImVec2(cx, yTop);   cx += wDec;
+    env[2] = ImVec2(cx, ySL);    cx += wSus;
+    env[3] = ImVec2(cx, ySL);
+    env[4] = ImVec2(cx + wRel, yBot);
+
+    // Filled area under envelope
+    ImVec2 fill[8];
+    int fi = 0;
+    for (int i = 0; i < 5; i++) fill[fi++] = env[i];
+    fill[fi++] = ImVec2(env[4].x, yBot);
+    fill[fi++] = ImVec2(x0, yBot);
+    ImU32 fillCol = (col & 0x00FFFFFF) | IM_COL32(0,0,0,40);
+    dl->AddConvexPolyFilled(fill, fi, fillCol);
+
+    // Envelope outline
+    dl->AddPolyline(env, 5, col, 0, 1.5f);
+
+    // Sustain level dashed line
+    ImU32 dashCol = (col & 0x00FFFFFF) | IM_COL32(0,0,0,70);
+    float xd = x0;
+    while (xd < x0 + w) {
+        dl->AddLine(ImVec2(xd, ySL), ImVec2(xd+3.f, ySL), dashCol, 1.f);
+        xd += 6.f;
+    }
+
+    // "EG" label
+    dl->AddText(ImVec2(x0+2, y0+1), IM_COL32(120,120,120,180), "EG");
+}
+
+// =============================================================================
+// 12. IMGUI PATCH EDITOR
 // =============================================================================
 
 static bool drawPatchEditor(AppState& app, float fps)
@@ -434,10 +748,8 @@ static bool drawPatchEditor(AppState& app, float fps)
     bool changed = false;
     PatchEditorState& ed = app.editor;
 
-    // Initial position / size — user can drag and resize freely after that
     ImGui::SetNextWindowPos( ImVec2(12.0f, 12.0f), ImGuiCond_Once);
-    ImGui::SetNextWindowSize(ImVec2(700.0f, (float)app.winH - 24.0f),
-                             ImGuiCond_Once);
+    ImGui::SetNextWindowSize(ImVec2(700.0f, (float)app.winH - 24.0f), ImGuiCond_Once);
 
     if (!ImGui::Begin("YM2612 Patch Editor"))
     {
@@ -452,7 +764,7 @@ static bool drawPatchEditor(AppState& app, float fps)
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ── Instrument dropdown ──────────────────────────────────────────────────
+    // ── Instrument dropdown (always visible) ─────────────────────────────────
     ImGui::Text("Instrument");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
@@ -461,145 +773,313 @@ static bool drawPatchEditor(AppState& app, float fps)
     {
         for (int i = 0; i < NUM_PATCHES; i++)
         {
-            bool selected = (i == ed.selectedIdx);
-            if (ImGui::Selectable(PATCH_CATALOGUE[i].name, selected))
-            {
-                ed.selectedIdx = i;
-                // pushPatch() will be called below since changed=true
-                changed = true;
-            }
-            if (selected) ImGui::SetItemDefaultFocus();
+            bool sel = (i == ed.selectedIdx);
+            if (ImGui::Selectable(PATCH_CATALOGUE[i].name, sel))
+            { ed.selectedIdx = i; changed = true; }
+            if (sel) ImGui::SetItemDefaultFocus();
         }
         ImGui::EndCombo();
     }
 
     ImGui::Spacing();
+
+    // ── Tab bar ───────────────────────────────────────────────────────────────
+    // We manage activeTab manually so we can block the Designer tab when the
+    // code editor has unparsed/errored content.
+
+    // Render tab buttons manually so we can intercept clicks.
+    const ImVec4 tabActive   = ImGui::GetStyleColorVec4(ImGuiCol_TabActive);
+    const ImVec4 tabInactive = ImGui::GetStyleColorVec4(ImGuiCol_Tab);
+
+    auto drawTab = [&](const char* label, int idx) -> bool
+    {
+        bool isActive = (ed.activeTab == idx);
+        ImGui::PushStyleColor(ImGuiCol_Button,
+            isActive ? tabActive : tabInactive);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+            ImGui::GetStyleColorVec4(ImGuiCol_TabHovered));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+            ImGui::GetStyleColorVec4(ImGuiCol_TabActive));
+        bool clicked = ImGui::Button(label);
+        ImGui::PopStyleColor(3);
+        return clicked;
+    };
+
+    bool wantDesigner = drawTab("Designer", 0);
+    ImGui::SameLine();
+    bool wantCode     = drawTab("Code",     1);
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ── Global parameters ────────────────────────────────────────────────────
-    YM2612Patch& p = ed.current();
-
-    ImGui::Text("Global");
-    ImGui::Spacing();
-
-    // Layout: "LABEL  [====slider====]" repeated 4 times on one line.
-    // We draw Text() then SameLine() then a ##-only slider so the label
-    // sits visibly to the left of the track.
-    // Each group is (labelW + sliderW) wide; sliderW is computed so all four
-    // groups fit in the available width with ItemSpacing gaps between them.
+    // ── Tab switch logic ──────────────────────────────────────────────────────
+    if (wantDesigner && ed.activeTab == 1)
     {
-        float avail   = ImGui::GetContentRegionAvail().x;
-        float sp      = ImGui::GetStyle().ItemSpacing.x;
-        float labelW  = ImGui::CalcTextSize("FMS").x + sp; // widest label = "FMS"
-        // 4 groups, 3 gaps between them
-        float sliderW = (avail - (labelW * 4.0f) - sp * 3.0f) / 4.0f;
-        if (sliderW < 30.0f) sliderW = 30.0f;
-
-        ImGui::Text("ALG"); ImGui::SameLine();
-        ImGui::SetNextItemWidth(sliderW);
-        if (ImGui::SliderInt("##ALGg", &p.ALG, 0, 7)) changed = true;
-
-        ImGui::SameLine();
-        ImGui::Text("FB"); ImGui::SameLine();
-        ImGui::SetNextItemWidth(sliderW);
-        if (ImGui::SliderInt("##FBg",  &p.FB,  0, 7)) changed = true;
-
-        ImGui::SameLine();
-        ImGui::Text("AMS"); ImGui::SameLine();
-        ImGui::SetNextItemWidth(sliderW);
-        if (ImGui::SliderInt("##AMSg", &p.AMS, 0, 3)) changed = true;
-
-        ImGui::SameLine();
-        ImGui::Text("FMS"); ImGui::SameLine();
-        ImGui::SetNextItemWidth(sliderW);
-        if (ImGui::SliderInt("##FMSg", &p.FMS, 0, 7)) changed = true;
+        // Attempt to leave Code tab → must parse successfully
+        if (ed.tryApplyCode())
+        {
+            ed.activeTab = 0;
+            changed = true;   // patch may have changed
+        }
+        // If parse failed, codeHasError is set and we stay on Code tab
+    }
+    if (wantCode && ed.activeTab == 0)
+    {
+        // Enter Code tab: regenerate buffer, snapshot saved state
+        ed.savedPatch     = ed.current();
+        ed.savedLfoEnable = ed.lfoEnable;
+        ed.savedLfoFreq   = ed.lfoFreq;
+        ed.hasSaved       = true;
+        ed.refreshCodeBuf();
+        ed.activeTab      = 1;
     }
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // ── Operator columns ─────────────────────────────────────────────────────
-    ImGui::Text("Operators");
-    ImGui::Spacing();
-
-    // Correct ImGui table sequencing with BordersInnerV (uses draw channel splitter):
-    //   1. TableSetupColumn x4   — register columns, splitter not yet active
-    //   2. TableHeadersRow       — ImGui internally handles row + channels
-    //   3. TableNextRow          — first data row, one row holds all sliders
-    //   4. TableSetColumnIndex   — switch column, place widgets vertically
-    //   5. EndTable
-
-    if (ImGui::BeginTable("##ops", 4,
-            ImGuiTableFlags_BordersInnerV |
-            ImGuiTableFlags_SizingStretchSame))
+    // ── DESIGNER TAB ─────────────────────────────────────────────────────────
+    if (ed.activeTab == 0)
     {
-        ImGui::TableSetupColumn("OP 1");
-        ImGui::TableSetupColumn("OP 2");
-        ImGui::TableSetupColumn("OP 3");
-        ImGui::TableSetupColumn("OP 4");
-        ImGui::TableHeadersRow();
-        ImGui::TableNextRow();
+        YM2612Patch& p = ed.current();
+        ImGui::Text("Global");
+        ImGui::Spacing();
 
-        // For each operator: draw a Text label on the left, then SameLine(),
-        // then SetNextItemWidth(-1) with a ##-only slider ID.
-        // This keeps the label visible inside the column — if the label is
-        // embedded in the slider ID (e.g. "DT##0"), ImGui renders it to the
-        // RIGHT of the track and it gets clipped by the column boundary.
-        // Using a separate Text widget puts it on the LEFT where there is room.
-
-        for (int op = 0; op < 4; op++)
         {
-            ImGui::TableSetColumnIndex(op);
-            YM2612Operator& o = p.op[op];
-            char s[16];
+            float avail   = ImGui::GetContentRegionAvail().x;
+            float sp      = ImGui::GetStyle().ItemSpacing.x;
+            float labelW  = ImGui::CalcTextSize("FMS").x + sp;
+            float sliderW = (avail - labelW*4.f - sp*3.f) / 4.f;
+            if (sliderW < 30.f) sliderW = 30.f;
 
-// Macro: visible text label left, slider fills rest of column, unique ID per op.
+            ImGui::Text("ALG"); ImGui::SameLine();
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::SliderInt("##ALGg", &p.ALG, 0, 7)) changed = true;
+
+            ImGui::SameLine();
+            ImGui::Text("FB"); ImGui::SameLine();
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::SliderInt("##FBg",  &p.FB,  0, 7)) changed = true;
+
+            ImGui::SameLine();
+            ImGui::Text("AMS"); ImGui::SameLine();
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::SliderInt("##AMSg", &p.AMS, 0, 3)) changed = true;
+
+            ImGui::SameLine();
+            ImGui::Text("FMS"); ImGui::SameLine();
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::SliderInt("##FMSg", &p.FMS, 0, 7)) changed = true;
+        }
+
+        // ALG diagram
+        {
+            ImVec2 cSize(ImGui::GetContentRegionAvail().x, 72.f);
+            ImVec2 cPos = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##algcanvas", cSize);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(cPos, ImVec2(cPos.x+cSize.x, cPos.y+cSize.y),
+                              IM_COL32(20,20,30,180), 4.f);
+            char algBuf[16];
+            snprintf(algBuf, sizeof(algBuf), "ALG %d", p.ALG);
+            dl->AddText(ImVec2(cPos.x+4, cPos.y+3), IM_COL32(180,180,180,200), algBuf);
+            drawAlgoIndicator(dl, ImVec2(cPos.x, cPos.y+14.f),
+                              ImVec2(cSize.x, cSize.y-14.f), p.ALG);
+        }
+
+        ImGui::Spacing();
+
+        // LFO
+        {
+            static const char* LFO_LABELS[] = {
+                "3.82 Hz","5.33 Hz","5.77 Hz","6.11 Hz",
+                "6.60 Hz","9.23 Hz","46.11 Hz","69.22 Hz"
+            };
+            if (ImGui::Checkbox("LFO##lfoEn", &ed.lfoEnable)) changed = true;
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!ed.lfoEnable);
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            if (ImGui::BeginCombo("##lfoFreq", LFO_LABELS[ed.lfoFreq]))
+            {
+                for (int i = 0; i < 8; i++) {
+                    bool sel = (i == ed.lfoFreq);
+                    if (ImGui::Selectable(LFO_LABELS[i], sel))
+                    { ed.lfoFreq = i; changed = true; }
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::EndDisabled();
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // Operator columns
+        ImGui::Text("Operators");
+        ImGui::Spacing();
+
+        if (ImGui::BeginTable("##ops", 4,
+                ImGuiTableFlags_BordersInnerV |
+                ImGuiTableFlags_SizingStretchSame))
+        {
+            ImGui::TableSetupColumn("OP 1");
+            ImGui::TableSetupColumn("OP 2");
+            ImGui::TableSetupColumn("OP 3");
+            ImGui::TableSetupColumn("OP 4");
+            ImGui::TableHeadersRow();
+            ImGui::TableNextRow();
+
 #define OPS(lbl, fld, lo, hi) \
     ImGui::Text(lbl); ImGui::SameLine(); \
     ImGui::SetNextItemWidth(-1); \
     snprintf(s, sizeof(s), "##%s%d", lbl, op); \
     if (ImGui::SliderInt(s, &o.fld, lo, hi)) changed = true;
 
-            OPS("TL",  TL,   0, 127)
-            OPS("SSG", SSG,  0,   8)
-            OPS("AR",  AR,   0,  31)
-            OPS("DR",  DR,   0,  31)
-            OPS("SR",  SR,   0,  31)
-            OPS("SL",  SL,   0,  15)
-            OPS("RR",  RR,   0,  15)
-            OPS("MUL", MUL,  0,  15)
-            OPS("DT",  DT,  -3,   3)
-            OPS("RS",  RS,   0,   3)
-            OPS("AM",  AM,   0,   1)
+            for (int op = 0; op < 4; op++)
+            {
+                ImGui::TableSetColumnIndex(op);
+                YM2612Operator& o = p.op[op];
+                char s[16];
+                ImU32 opCol = OP_COLORS[op];
+
+                // Envelope visualizer
+                {
+                    float envH = 42.f;
+                    float envW = ImGui::GetContentRegionAvail().x;
+                    ImVec2 envPos = ImGui::GetCursorScreenPos();
+                    snprintf(s, sizeof(s), "##env%d", op);
+                    ImGui::InvisibleButton(s, ImVec2(envW, envH));
+                    drawEnvelopeIndicator(ImGui::GetWindowDrawList(),
+                                          envPos, ImVec2(envW, envH), o, opCol);
+                }
+
+                OPS("TL",  TL,   0, 127)
+
+                // SSG indicator
+                OPS("SSG", SSG,  0,   8)
+                {
+                    float ssgH = 18.f;
+                    float ssgW = ImGui::GetContentRegionAvail().x;
+                    ImVec2 ssgPos = ImGui::GetCursorScreenPos();
+                    snprintf(s, sizeof(s), "##ssg%d", op);
+                    ImGui::InvisibleButton(s, ImVec2(ssgW, ssgH));
+                    drawSsgIndicator(ImGui::GetWindowDrawList(),
+                                     ssgPos, ImVec2(ssgW, ssgH), o.SSG, opCol);
+                }
+
+                OPS("AR",  AR,   0,  31)
+                OPS("DR",  DR,   0,  31)
+                OPS("SR",  SR,   0,  31)
+                OPS("SL",  SL,   0,  15)
+                OPS("RR",  RR,   0,  15)
+                OPS("MUL", MUL,  0,  15)
+                OPS("DT",  DT,  -3,   3)
+                OPS("RS",  RS,   0,   3)
+                OPS("AM",  AM,   0,   1)
+            }
 #undef OPS
+            ImGui::EndTable();
         }
 
-        ImGui::EndTable();
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // Mute
+        bool muteChanged = false;
+        muteChanged |= ImGui::Checkbox("Mute Ch0 (pad)",      &app.muted[0]);
+        ImGui::SameLine();
+        muteChanged |= ImGui::Checkbox("Mute Ch1 (staccato)", &app.muted[1]);
+        if (muteChanged) changed = true;
+
+        ImGui::Spacing();
+        ImGui::TextDisabled("Ch0: pad (inst 0x00)  |  Ch1: staccato (inst 0x01)  |  editor controls both");
     }
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
+    // ── CODE TAB ─────────────────────────────────────────────────────────────
+    if (ed.activeTab == 1)
+    {
+        // Reserve space: leave room at bottom for buttons + error line
+        const float bottomH = ImGui::GetFrameHeightWithSpacing() * 2.f + 8.f;
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        float  textH = avail.y - bottomH;
+        if (textH < 60.f) textH = 60.f;
 
-    // ── Mute ─────────────────────────────────────────────────────────────────
-    // Toggling a checkbox calls pushPatch so the chip is updated immediately.
-    bool muteChanged = false;
-    muteChanged |= ImGui::Checkbox("Mute Ch0 (pad)",      &app.muted[0]);
-    ImGui::SameLine();
-    muteChanged |= ImGui::Checkbox("Mute Ch1 (staccato)", &app.muted[1]);
-    if (muteChanged) changed = true;
+        // Highlight error line inside the text box via a draw-list overlay.
+        // We do this by drawing a tinted rect behind the matching line before
+        // InputTextMultiline renders (using the window draw list, drawn after).
+        ImVec2 textPos = ImGui::GetCursorScreenPos();
 
-    ImGui::Spacing();
-    ImGui::TextDisabled("Ch0: pad (inst 0x00)  |  Ch1: staccato (inst 0x01)  |  editor controls both");
+        ImGui::InputTextMultiline(
+            "##code",
+            ed.codeBuf, PatchEditorState::CODE_BUF_SIZE,
+            ImVec2(avail.x, textH),
+            ImGuiInputTextFlags_AllowTabInput);
+
+        // If there is an error, tint the error line red inside the text box
+        if (ed.codeHasError && ed.codeErrLine > 0)
+        {
+            // Approximate line height from font size
+            float lineH = ImGui::GetTextLineHeight();
+            float lineY = textPos.y + (ed.codeErrLine - 1) * lineH;
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                ImVec2(textPos.x, lineY),
+                ImVec2(textPos.x + avail.x, lineY + lineH),
+                IM_COL32(200, 40, 40, 60));
+        }
+
+        ImGui::Spacing();
+
+        // ── Buttons ───────────────────────────────────────────────────────────
+        // [Apply & Close] attempts parse, switches to Designer if ok.
+        // [Restore]       reverts to saved snapshot, switches to Designer.
+        float btnW = (avail.x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+
+        if (ImGui::Button("Apply & Close", ImVec2(btnW, 0)))
+        {
+            if (ed.tryApplyCode())
+            {
+                ed.activeTab = 0;
+                changed = true;
+            }
+            // else error is shown below
+        }
+
+        ImGui::SameLine();
+
+        // Restore is only available if we have a saved snapshot
+        ImGui::BeginDisabled(!ed.hasSaved);
+        if (ImGui::Button("Restore", ImVec2(btnW, 0)))
+        {
+            ed.restoreToSaved();
+            ed.activeTab = 0;
+            changed = true;
+        }
+        ImGui::EndDisabled();
+
+        // ── Error display ─────────────────────────────────────────────────────
+        if (ed.codeHasError)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 90, 90, 255));
+            if (ed.codeErrLine > 0)
+            {
+                char loc[64];
+                snprintf(loc, sizeof(loc), "Line %d col %d: ", ed.codeErrLine, ed.codeErrCol);
+                ImGui::TextUnformatted(loc);
+                ImGui::SameLine();
+            }
+            ImGui::TextWrapped("%s", ed.codeError);
+            ImGui::PopStyleColor();
+        }
+        else
+        {
+            ImGui::TextDisabled("Edit C++ patch code, then Apply & Close — or Restore to last save.");
+        }
+    }
 
     ImGui::End();
     return changed;
 }
 
 // =============================================================================
-// 12. PER-FRAME TICK
+// 13. PER-FRAME TICK
 // =============================================================================
 
 static void mainTick()
