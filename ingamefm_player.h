@@ -383,7 +383,7 @@ class IngameFMPlayer
 public:
     // Maximum channels supported (YM2612 port-0 only: channels 0-2)
     // Extend to 6 by adding port-1 support if needed.
-    static constexpr int MAX_CHANNELS = 3;
+    static constexpr int MAX_CHANNELS = 4;
 
     IngameFMPlayer()
     {
