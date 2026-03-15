@@ -21,6 +21,7 @@
 
 #include "ingamefm.h"
 #include <cstdio>
+#include <algorithm>
 
 static const char* SONG =
 "org.tildearrow.furnace - Pattern Data (32)\n"
@@ -136,13 +137,17 @@ static const SfxEntry SFX_TABLE[] =
 };
 static constexpr int SFX_COUNT = 19;
 
+static float g_music_vol = 1.0f;
+static float g_sfx_vol   = 1.0f;
+static constexpr float VOL_STEP = 0.1f;
+
 int main(int /*argc*/, char** /*argv*/)
 {
     if (SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0)
     { std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError()); return 1; }
 
     SDL_Window* window = SDL_CreateWindow(
-        "ingamefm demo5  |  1-3 q-u a-l = SFX  |  Esc: quit",
+        "ingamefm demo5  |  1-3 q-u a-l = SFX  |  Up/Dn=music  Lt/Rt=sfx  |  Esc",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 540, 100, SDL_WINDOW_SHOWN);
     if (!window) { SDL_Quit(); return 1; }
 
@@ -203,7 +208,9 @@ int main(int /*argc*/, char** /*argv*/)
         else if (k >= SDLK_0 && k <= SDLK_9) kn[0] = (char)(k - SDLK_0 + '0');
         std::printf("    %s  p%d  %s\n", kn, SFX_TABLE[i].priority, SFX_TABLE[i].name);
     }
-    std::printf("\n  Esc to quit.\n\n");
+    std::printf("\n  Up/Down = music vol    Left/Right = SFX vol\n");
+  std::printf("  Music: 100%%   SFX: 100%%\n\n");
+  std::printf("  Esc to quit.\n\n");
 
     bool running = true;
     while (running) {
@@ -212,6 +219,27 @@ int main(int /*argc*/, char** /*argv*/)
             if (e.type == SDL_QUIT) { running = false; break; }
             if (e.type == SDL_KEYDOWN && !e.key.repeat) {
                 if (e.key.keysym.sym == SDLK_ESCAPE) { running = false; continue; }
+                // Volume controls
+                if (e.key.keysym.sym == SDLK_UP) {
+                    g_music_vol = std::min(1.0f, g_music_vol + VOL_STEP);
+                    player.set_music_volume(g_music_vol);
+                    std::printf("  Music: %.0f%%\n", g_music_vol * 100.f); continue;
+                }
+                if (e.key.keysym.sym == SDLK_DOWN) {
+                    g_music_vol = std::max(0.0f, g_music_vol - VOL_STEP);
+                    player.set_music_volume(g_music_vol);
+                    std::printf("  Music: %.0f%%\n", g_music_vol * 100.f); continue;
+                }
+                if (e.key.keysym.sym == SDLK_RIGHT) {
+                    g_sfx_vol = std::min(1.0f, g_sfx_vol + VOL_STEP);
+                    player.set_sfx_volume(g_sfx_vol);
+                    std::printf("  SFX:   %.0f%%\n", g_sfx_vol * 100.f); continue;
+                }
+                if (e.key.keysym.sym == SDLK_LEFT) {
+                    g_sfx_vol = std::max(0.0f, g_sfx_vol - VOL_STEP);
+                    player.set_sfx_volume(g_sfx_vol);
+                    std::printf("  SFX:   %.0f%%\n", g_sfx_vol * 100.f); continue;
+                }
                 for (int i = 0; i < SFX_COUNT; i++) {
                     if (e.key.keysym.sym == SFX_TABLE[i].key) {
                         SDL_LockAudioDevice(dev);

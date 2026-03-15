@@ -254,6 +254,13 @@ public:
 
     IngameFMPlayer() {}
 
+    // Volume control — 0.0 (silent) .. 1.0 (full).
+    // Music and SFX are rendered into separate passes using YM2612 panning
+    // registers as channel masks, then mixed with independent scalars.
+    // Thread-safe — no audio lock needed.
+    void set_music_volume(float v) { music_vol_.store(std::max(0.f, std::min(1.f, v))); }
+    void set_sfx_volume  (float v) { sfx_vol_  .store(std::max(0.f, std::min(1.f, v))); }
+
     void set_song(const std::string& text, int tick_rate, int speed)
     {
         if (tick_rate <= 0) throw std::runtime_error("tick_rate must be > 0");
@@ -398,6 +405,11 @@ private:
     int         samples_per_row_ = 0;
 
     std::unique_ptr<IngameFMChip> ym_;
+
+    std::atomic<float> music_vol_{ 1.0f };
+    std::atomic<float> sfx_vol_  { 1.0f };
+    // Scratch buffer for second generate pass (max SDL buffer = 512 frames)
+    int16_t scratch_[512 * 2]{};
 
     int  current_row_   = 0;
     int  sample_in_row_ = 0;
@@ -596,7 +608,71 @@ private:
             int next_boundary = in_gap ? KEY_OFF_GAP_SAMPLES : samples_per_row_;
             int to_generate   = std::min(remaining, next_boundary - pos_in_row);
 
-            ym_->generate(out, to_generate);
+            // Two-pass render using YM2612 panning registers as channel masks:
+            //
+            // Pass 1 — music channels only (SFX channels muted via 0xB4=0x00):
+            //   Renders music at music_vol_ scalar.
+            // Pass 2 — SFX channels only (music channels muted):
+            //   Renders SFX at sfx_vol_ scalar, added on top.
+            //
+            // Panning is restored after both passes.
+            // The chip clock advances once per pass, so we only do pass 2 when
+            // any SFX is actually active — otherwise one pass suffices.
+            //
+            // When music_vol_ == sfx_vol_ we skip masking and just scale once.
+            {
+                const float mv = music_vol_.load();
+                const float sv = sfx_vol_.load();
+                const int   n  = to_generate * 2;
+
+                // Check if any SFX is active on a reserved channel
+                bool any_sfx = false;
+                if (sfx_voices_ > 0)
+                    for (int c = MAX_CHANNELS - sfx_voices_; c < MAX_CHANNELS; ++c)
+                        if (sfx_voice_[c].active()) { any_sfx = true; break; }
+
+                if (!any_sfx || mv == sv) {
+                    // Single pass — no masking needed
+                    ym_->generate(out, to_generate);
+                    if (mv < 1.0f)
+                        for (int i = 0; i < n; ++i)
+                            out[i] = static_cast<int16_t>(out[i] * mv);
+                } else {
+                    // Pass 1: mute SFX channels, render music at mv
+                    const int first_sfx = MAX_CHANNELS - sfx_voices_;
+                    for (int c = first_sfx; c < MAX_CHANNELS; ++c) {
+                        uint8_t port = (c >= 3) ? 1 : 0;
+                        ym_->write(port, 0xB4 + (c % 3), 0x00);
+                    }
+                    ym_->generate(out, to_generate);
+                    if (mv < 1.0f)
+                        for (int i = 0; i < n; ++i)
+                            out[i] = static_cast<int16_t>(out[i] * mv);
+
+                    // Pass 2: restore SFX channels, mute music channels, render SFX at sv
+                    // Restore SFX panning (load_patch sets 0xC0, replicate that)
+                    for (int c = first_sfx; c < MAX_CHANNELS; ++c) {
+                        uint8_t port = (c >= 3) ? 1 : 0;
+                        ym_->write(port, 0xB4 + (c % 3), 0xC0);
+                    }
+                    for (int c = 0; c < first_sfx; ++c) {
+                        uint8_t port = (c >= 3) ? 1 : 0;
+                        ym_->write(port, 0xB4 + (c % 3), 0x00);
+                    }
+                    ym_->generate(scratch_, to_generate);
+                    // Restore music channel panning
+                    for (int c = 0; c < first_sfx; ++c) {
+                        uint8_t port = (c >= 3) ? 1 : 0;
+                        ym_->write(port, 0xB4 + (c % 3), 0xC0);
+                    }
+                    // Mix pass 2 into output
+                    for (int i = 0; i < n; ++i) {
+                        int mixed = static_cast<int>(out[i])
+                                  + static_cast<int>(scratch_[i] * sv);
+                        out[i] = static_cast<int16_t>(std::max(-32768, std::min(32767, mixed)));
+                    }
+                }
+            }
 
             for (int ch = MAX_CHANNELS - sfx_voices_; ch < MAX_CHANNELS; ++ch)
                 sfx_tick_voice(ch, to_generate);
