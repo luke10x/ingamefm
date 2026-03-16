@@ -156,7 +156,39 @@ static const char* SONG =
 /* r31  */ "OFF....|.......|.......|.......|.......|OFF....\n";
 
 // =============================================================================
-// 5. SFX TABLE
+// 5. SONG 2  — simpler, slower, contrasting feel
+//
+// 3 channels only (ch3-5 are silent), tick_rate=60, speed=30 -> 500ms/row
+// Ch0 — Beat  (KICK/SNARE)
+// Ch1 — Simple melody (GUITAR)
+// Ch2 — Root bass (SLAP_BASS)
+// =============================================================================
+
+static const char* SONG2 =
+"org.tildearrow.furnace - Pattern Data (16)\n"
+"16\n"
+/* r 0  */ "C-1017F|C-4037F|C-2047F|.......|.......|.......\n"
+/* r 1  */ "OFF....|.......|.......|.......|.......|.......\n"
+/* r 2  */ "A-2027F|.......|.......|.......|.......|.......\n"
+/* r 3  */ "OFF....|.......|.......|.......|.......|.......\n"
+/* r 4  */ "C-1017F|E-4037F|G-2047F|.......|.......|.......\n"
+/* r 5  */ "OFF....|.......|.......|.......|.......|.......\n"
+/* r 6  */ "A-2027F|.......|.......|.......|.......|.......\n"
+/* r 7  */ "OFF....|.......|.......|.......|.......|.......\n"
+/* r 8  */ "C-1017F|G-4037F|F-2047F|.......|.......|.......\n"
+/* r 9  */ "OFF....|.......|.......|.......|.......|.......\n"
+/* r10  */ "A-2027F|.......|.......|.......|.......|.......\n"
+/* r11  */ "OFF....|.......|.......|.......|.......|.......\n"
+/* r12  */ "C-1017F|E-4037F|C-2047F|.......|.......|.......\n"
+/* r13  */ "OFF....|.......|.......|.......|.......|.......\n"
+/* r14  */ "A-2027F|.......|.......|.......|.......|.......\n"
+/* r15  */ "OFF....|OFF....|OFF....|.......|.......|.......\n";
+
+static int  g_currentSong  = 0;   // 0 = SONG, 1 = SONG2
+static bool g_changePending = false;
+
+// =============================================================================
+// 6. SFX TABLE
 // =============================================================================
 
 static const char* SFX_DING =
@@ -422,8 +454,41 @@ static void drawSfxPanel(AppState& app)
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoCollapse);
 
-    // ── Channel legend ────────────────────────────────────────────────────────
+    // ── Song selector ────────────────────────────────────────────────────────
     ImGui::TextDisabled("6-channel music  |  sfx_set_voices(3)  |  sfx has own 3-voice pool");
+    ImGui::Separator();
+
+    {
+        int row = app.player.get_current_row();
+        int len = app.player.get_song_length();
+        const char* songName = (g_currentSong == 0) ? "Song 1  (6ch, fast)" : "Song 2  (3ch, slow)";
+        ImGui::Text("Now playing: %s   row %d / %d", songName, row, len);
+        ImGui::Spacing();
+
+        auto doChange = [&](SongChangeWhen when, int startRow) {
+            int next = 1 - g_currentSong;
+            const char* txt2 = (next == 0) ? SONG : SONG2;
+            int tr = (next == 0) ? 60 : 60;
+            int sp = (next == 0) ? 20 : 30;
+            SDL_LockAudioDevice(app.audioDev);
+            app.player.change_song(txt2, tr, sp, when, startRow);
+            SDL_UnlockAudioDevice(app.audioDev);
+            g_currentSong = next;
+        };
+
+        if (ImGui::Button("Switch NOW##sw1"))
+            doChange(SongChangeWhen::NOW, 0);
+        ImGui::SameLine();
+        if (ImGui::Button("Switch at end##sw2"))
+            doChange(SongChangeWhen::AT_PATTERN_END, 0);
+        ImGui::SameLine();
+        // Switch at end but seek into the new song by current row fraction
+        if (ImGui::Button("Switch + match pos##sw3")) {
+            int nextLen = (g_currentSong == 0) ? 16 : 32; // SONG2=16, SONG=32
+            int seekRow = (len > 0) ? (row * nextLen / len) : 0;
+            doChange(SongChangeWhen::AT_PATTERN_END, seekRow);
+        }
+    }
     ImGui::Separator();
 
     // ── Volume sliders ────────────────────────────────────────────────────────

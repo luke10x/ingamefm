@@ -150,6 +150,15 @@ struct SfxVoiceState {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Song-change timing
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum class SongChangeWhen {
+    NOW,            // Switch immediately on the next audio buffer
+    AT_PATTERN_END  // Wait until the current song reaches its last row, then switch
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // IngameFMPlayer
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -180,6 +189,38 @@ public:
         if(instrument_id<0||instrument_id>255) throw std::runtime_error("instrument_id must be 0-255");
         patches_[instrument_id]=patch; patches_present_[instrument_id]=true;
     }
+
+    // ── Song change (call with audio device locked or before start) ─────────────
+    // Queues a song change. The new song is pre-parsed from text immediately
+    // (throws on parse error). Actual switch happens according to `when`:
+    //   NOW           — at the start of the next audio buffer
+    //   AT_PATTERN_END — after the current song finishes its last row
+    // `start_row` is clamped to the new song's row count.
+    void change_song(const std::string& text, int tick_rate, int speed,
+                     SongChangeWhen when = SongChangeWhen::AT_PATTERN_END,
+                     int start_row = 0)
+    {
+        if(tick_rate<=0) throw std::runtime_error("tick_rate must be > 0");
+        if(speed<=0)     throw std::runtime_error("speed must be > 0");
+        PendingSong ps;
+        ps.song            = parse_ingamefm_song(text);
+        ps.tick_rate       = tick_rate;
+        ps.speed           = speed;
+        ps.samples_per_row = static_cast<int>(
+            static_cast<double>(SAMPLE_RATE)/tick_rate*speed);
+        ps.start_row       = std::max(0, std::min(start_row,
+                                 static_cast<int>(ps.song.rows.size())-1));
+        ps.when            = when;
+        ps.pending         = true;
+        pending_song_      = std::move(ps);
+    }
+
+    // Returns the current playback row. Thread-safe (atomic read).
+    int get_current_row()  const { return current_row_.load(); }
+
+    // Returns the total number of rows in the currently playing song.
+    // Call with audio device locked (reads song_ without synchronisation).
+    int get_song_length()  const { return static_cast<int>(song_.rows.size()); }
 
     // ── SFX setup ────────────────────────────────────────────────────────────
     // sfx_set_voices(n): how many voices ym_sfx_ exposes for SFX (1..MAX_SFX_VOICES).
@@ -296,7 +337,8 @@ private:
     // ── Music state ──────────────────────────────────────────────────────────
     IngameFMSong song_;
     int  tick_rate_=60, speed_=6, samples_per_row_=0;
-    int  current_row_=0, sample_in_row_=0;
+    std::atomic<int> current_row_{0};
+    int  sample_in_row_=0;
     bool loop_=false;
     std::atomic<bool> finished_{false};
     std::array<IngameFMChannelState, MAX_CHANNELS> ch_state_{};
@@ -305,6 +347,18 @@ private:
 
     struct PendingNote { bool has_note=false; bool is_off=false; int midi_note=0; int instId=0; int volume=0x7F; };
     std::array<PendingNote, MAX_CHANNELS> pending_{};
+
+    // ── Pending song change ──────────────────────────────────────────────────
+    struct PendingSong {
+        IngameFMSong   song;
+        int            tick_rate       = 60;
+        int            speed           = 6;
+        int            samples_per_row = 0;
+        int            start_row       = 0;
+        SongChangeWhen when            = SongChangeWhen::AT_PATTERN_END;
+        bool           pending         = false;
+    };
+    PendingSong pending_song_{};
 
     // ── Chips ────────────────────────────────────────────────────────────────
     std::unique_ptr<IngameFMChip> ym_music_;
@@ -317,7 +371,7 @@ private:
     // ── Init ─────────────────────────────────────────────────────────────────
     void reset_state(bool loop)
     {
-        loop_=loop; current_row_=0; sample_in_row_=0; finished_.store(false);
+        loop_=loop; current_row_.store(0); sample_in_row_=0; finished_.store(false); pending_song_.pending=false;
         for(auto& c:ch_state_) c=IngameFMChannelState{};
         for(auto& p:pending_)  p={};
         for(auto& v:sfx_voice_) v=SfxVoiceState{};
@@ -348,6 +402,31 @@ private:
         }
         for(int op=0;op<4;op++) if(isCarrier[op]) p.op[op].TL=std::min(127,p.op[op].TL+tl_add);
         return p;
+    }
+
+    // Apply a pending song change immediately.
+    // Silences all music channels, swaps song state, restarts from start_row.
+    // Must be called from the audio callback (already under audio lock).
+    void apply_pending_song()
+    {
+        PendingSong& ps = pending_song_;
+        // Silence all music channels cleanly
+        for(int ch=0;ch<MAX_CHANNELS;ch++) ym_music_->key_off(ch);
+        for(auto& c:ch_state_) c=IngameFMChannelState{};
+        for(auto& p:pending_)  p={};
+        // Swap in new song
+        song_            = std::move(ps.song);
+        tick_rate_       = ps.tick_rate;
+        speed_           = ps.speed;
+        samples_per_row_ = ps.samples_per_row;
+        current_row_.store(ps.start_row);
+        sample_in_row_   = 0;
+        finished_.store(false);
+        ps.pending       = false;
+        // Fire first row immediately (with gap so key_on lands cleanly)
+        process_row(current_row_.load());
+        commit_keyon();
+        sample_in_row_   = KEY_OFF_GAP_SAMPLES;
     }
 
     void process_row(int rowIdx)
@@ -445,6 +524,11 @@ private:
     void audio_callback(int16_t* stream, int samples)
     {
         if(finished_.load()) { std::memset(stream,0,samples*4); return; }
+
+        // Check for an immediate song change before generating anything
+        if(pending_song_.pending && pending_song_.when==SongChangeWhen::NOW)
+            apply_pending_song();
+
         int remaining=samples;
         int16_t* out=stream;
 
@@ -486,16 +570,26 @@ private:
             if(in_gap&&sample_in_row_>=KEY_OFF_GAP_SAMPLES) commit_keyon();
 
             if(sample_in_row_>=samples_per_row_) {
-                sample_in_row_=0; current_row_++;
-                if(current_row_>=(int)song_.rows.size()) {
-                    if(loop_) { for(auto& p:pending_) p={}; current_row_=0; }
+                sample_in_row_=0;
+                int row=current_row_.load()+1;
+                if(row>=(int)song_.rows.size()) {
+                    // Pattern end — apply queued AT_PATTERN_END song change if any
+                    if(pending_song_.pending &&
+                       pending_song_.when==SongChangeWhen::AT_PATTERN_END) {
+                        apply_pending_song();
+                        // apply_pending_song already called process_row + commit_keyon
+                        // and set sample_in_row_ = KEY_OFF_GAP_SAMPLES, so skip below
+                        break;
+                    }
+                    if(loop_) { for(auto& p:pending_) p={}; row=0; }
                     else {
                         std::memset(out,0,remaining*4);
                         for(int ch=0;ch<MAX_CHANNELS;ch++) ym_music_->key_off(ch);
                         finished_.store(true); return;
                     }
                 }
-                process_row(current_row_);
+                current_row_.store(row);
+                process_row(row);
             }
         }
     }
