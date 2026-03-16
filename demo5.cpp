@@ -184,7 +184,12 @@ int main(int /*argc*/, char** /*argv*/)
 
     SDL_AudioSpec desired{};
     desired.freq = IngameFMPlayer::SAMPLE_RATE; desired.format = AUDIO_S16SYS;
-    desired.channels = 2; desired.samples = 128;
+    desired.channels = 2;
+#ifdef __EMSCRIPTEN__
+    desired.samples  = 256;  // Web Audio API minimum
+#else
+    desired.samples  = 128;  // low latency on native
+#endif
     desired.callback = IngameFMPlayer::s_audio_callback; desired.userdata = &player;
     SDL_AudioSpec obtained{};
     SDL_AudioDeviceID dev = SDL_OpenAudioDevice(nullptr, 0, &desired, &obtained, 0);
