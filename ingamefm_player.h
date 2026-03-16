@@ -408,8 +408,6 @@ private:
 
     std::atomic<float> music_vol_{ 1.0f };
     std::atomic<float> sfx_vol_  { 1.0f };
-    // Scratch buffer for second generate pass (max SDL buffer = 512 frames)
-    int16_t scratch_[512 * 2]{};
 
     int  current_row_   = 0;
     int  sample_in_row_ = 0;
@@ -608,83 +606,21 @@ private:
             int next_boundary = in_gap ? KEY_OFF_GAP_SAMPLES : samples_per_row_;
             int to_generate   = std::min(remaining, next_boundary - pos_in_row);
 
-            // Two-pass render using YM2612 panning registers as channel masks:
-            //
-            // Pass 1 — music channels only (SFX channels muted via 0xB4=0x00):
-            //   Renders music at music_vol_ scalar.
-            // Pass 2 — SFX channels only (music channels muted):
-            //   Renders SFX at sfx_vol_ scalar, added on top.
-            //
-            // Panning is restored after both passes.
-            // The chip clock advances once per pass, so we only do pass 2 when
-            // any SFX is actually active — otherwise one pass suffices.
-            //
-            // When music_vol_ == sfx_vol_ we skip masking and just scale once.
+            // Single generate pass. Volume scalar: music_vol_ normally,
+            // sfx_vol_ when any SFX voice is active. Applied as float multiply
+            // on the output samples — no TL manipulation, timbre preserved.
             {
-                const float mv = music_vol_.load();
-                const float sv = sfx_vol_.load();
-                const int   n  = to_generate * 2;
-
-                // Check if any SFX is active on a reserved channel
-                bool any_sfx = false;
-                if (sfx_voices_ > 0)
+                ym_->generate(out, to_generate);
+                float scalar = music_vol_.load();
+                if (sfx_voices_ > 0) {
+                    float sv = sfx_vol_.load();
                     for (int c = MAX_CHANNELS - sfx_voices_; c < MAX_CHANNELS; ++c)
-                        if (sfx_voice_[c].active()) { any_sfx = true; break; }
-
-                if (!any_sfx || mv == sv) {
-                    // Single pass — no masking needed
-                    ym_->generate(out, to_generate);
-                    // Single pass: same 0.5 weight as two-pass music channel
-                    // so level is consistent when SFX kicks in.
-                    { float w = mv * 0.5f;
-                      for (int i = 0; i < n; ++i)
-                          out[i] = static_cast<int16_t>(out[i] * w); }
-                } else {
-                    // Pass 1: mute SFX channels, render music at mv
-                    const int first_sfx = MAX_CHANNELS - sfx_voices_;
-                    for (int c = first_sfx; c < MAX_CHANNELS; ++c) {
-                        uint8_t port = (c >= 3) ? 1 : 0;
-                        ym_->write(port, 0xB4 + (c % 3), 0x00);
-                    }
-                    ym_->generate(out, to_generate);
-                    if (mv < 1.0f)
-                        for (int i = 0; i < n; ++i)
-                            out[i] = static_cast<int16_t>(out[i] * mv);
-
-                    // Pass 2: restore SFX channels, mute music channels, render SFX at sv
-                    // Restore SFX panning (load_patch sets 0xC0, replicate that)
-                    for (int c = first_sfx; c < MAX_CHANNELS; ++c) {
-                        uint8_t port = (c >= 3) ? 1 : 0;
-                        ym_->write(port, 0xB4 + (c % 3), 0xC0);
-                    }
-                    for (int c = 0; c < first_sfx; ++c) {
-                        uint8_t port = (c >= 3) ? 1 : 0;
-                        ym_->write(port, 0xB4 + (c % 3), 0x00);
-                    }
-                    ym_->generate(scratch_, to_generate);
-                    // Restore music channel panning
-                    for (int c = 0; c < first_sfx; ++c) {
-                        uint8_t port = (c >= 3) ? 1 : 0;
-                        ym_->write(port, 0xB4 + (c % 3), 0xC0);
-                    }
-                    // Mix pass 2 into output.
-                    // Both passes are summed in float then scaled back to int16.
-                    // Each pass is weighted at 0.5 so the combined output never
-                    // exceeds the int16 range — no hard clipping, no distortion.
-                    // At full volume (mv=1, sv=1) each pass contributes 50% of
-                    // its original level, which sounds the same as a single pass
-                    // at full volume when both are playing simultaneously.
-                    // generate() already scales ymfm's int32 output to safe int16
-                    // range (divided by 6 for 6 channels). Two passes can still sum
-                    // to 2x, so we weight each at 0.5 here for safety.
-                    const float music_weight = mv * 0.5f;
-                    const float sfx_weight   = sv * 0.5f;
-                    for (int i = 0; i < n; ++i) {
-                        float mixed = static_cast<float>(out[i])     * music_weight
-                                    + static_cast<float>(scratch_[i]) * sfx_weight;
-                        out[i] = static_cast<int16_t>(
-                            std::max(-32768.f, std::min(32767.f, mixed)));
-                    }
+                        if (sfx_voice_[c].active()) { scalar = sv; break; }
+                }
+                if (scalar < 1.0f) {
+                    const int n = to_generate * 2;
+                    for (int i = 0; i < n; ++i)
+                        out[i] = static_cast<int16_t>(out[i] * scalar);
                 }
             }
 
