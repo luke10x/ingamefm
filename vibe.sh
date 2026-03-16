@@ -1,2 +1,2 @@
 #!/bin/bash
-cp -r ~/Downloads/ingamefm/* . &&  ./test.sh
+cp -r ~/Downloads/ingamefm/* . &&  ./demo6.sh
