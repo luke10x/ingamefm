@@ -144,9 +144,10 @@ public:
     void set_music_volume(float v) { music_vol_.store(std::max(0.f,std::min(1.f,v))); }
     void set_sfx_volume  (float v) { sfx_vol_  .store(std::max(0.f,std::min(1.f,v))); }
 
-    void add_patch(int instrument_id, const YM2612Patch& patch) {
+    void add_patch(int instrument_id, const YM2612Patch& patch,
+                   int block=0, int lfo_enable=0, int lfo_freq=0) {
         if(instrument_id<0||instrument_id>255) throw std::runtime_error("instrument_id must be 0-255");
-        patches_[instrument_id]=patch;
+        patches_[instrument_id] = {patch, block, lfo_enable, lfo_freq};
         patches_present_[instrument_id]=true;
     }
 
@@ -451,8 +452,14 @@ private:
     bool loop_=false;
     std::atomic<bool> finished_{false};
     std::array<IngameFMChannelState,MAX_CHANNELS> ch_state_{};
-    std::array<YM2612Patch,256>  patches_{};
-    std::array<bool,256>         patches_present_{};
+    struct PatchEntry {
+        YM2612Patch patch;
+        int  block      = 0;  // octave offset passed to set_frequency
+        int  lfo_enable = 0;
+        int  lfo_freq   = 0;
+    };
+    std::array<PatchEntry,256> patches_{};
+    std::array<bool,256>       patches_present_{};
 
     struct PendingNote { bool has_note=false; bool is_off=false; int midi_note=0; int instId=0; int volume=0x7F; };
     std::array<PendingNote,MAX_CHANNELS> pending_{};
@@ -521,7 +528,7 @@ private:
 
     static CachedAudio prerender(
         const IngameFMSong& song, int tick_rate, int speed, int num_channels,
-        const std::array<YM2612Patch,256>& patches,
+        const std::array<PatchEntry,256>& patches,
         const std::array<bool,256>& patches_present,
         int sample_rate)
     {
@@ -541,7 +548,6 @@ private:
         std::array<PendingNote,MAX_CHANNELS>           pending{};
 
         for(int rowIdx=0; rowIdx<song.num_rows; ++rowIdx) {
-            // Process row events — collect key_offs and pending key_ons
             if(rowIdx < (int)song.rows.size()) {
                 const IngameFMRow& row = song.rows[rowIdx];
                 int numCh = std::min((int)row.channels.size(), num_channels);
@@ -561,23 +567,29 @@ private:
                 }
             }
 
-            // Generate samples for this row
             for(int s=0; s<spr; ++s) {
-                // At the gap boundary: commit key_ons
                 if(s == KEY_OFF_GAP_SAMPLES) {
                     for(int ch=0;ch<num_channels;ch++) {
                         if(!pending[ch].has_note) continue;
-                        if(patches_present[pending[ch].instId]) {
-                            YM2612Patch p=apply_volume(patches[pending[ch].instId],pending[ch].volume);
-                            chip.load_patch(p,ch);
+                        int instId = pending[ch].instId;
+                        int block  = 0;
+                        if(patches_present[instId]) {
+                            const PatchEntry& pe = patches[instId];
+                            block = pe.block;
+                            YM2612Patch p = apply_volume(pe.patch, pending[ch].volume);
+                            chip.load_patch(p, ch);
+                            chip.enable_lfo(pe.lfo_enable != 0,
+                                            static_cast<uint8_t>(pe.lfo_freq));
                         }
-                        chip.set_frequency(ch, IngameFMChip::midi_to_hz(pending[ch].midi_note), 0);
+                        chip.set_frequency(ch,
+                            IngameFMChip::midi_to_hz(pending[ch].midi_note),
+                            block, sample_rate);
                         chip.key_on(ch);
                         ch_state[ch].active=true; pending[ch].has_note=false;
                     }
                 }
                 int16_t frame[2];
-                chip.generate(frame, 1);
+                chip.generate(frame, 1, sample_rate);
                 int idx = (rowIdx * spr + s) * 2;
                 result.samples[idx]   = frame[0];
                 result.samples[idx+1] = frame[1];
@@ -588,7 +600,7 @@ private:
 
     static CachedAudio prerender_song(
         const IngameFMSong& song, int tick_rate, int speed,
-        const std::array<YM2612Patch,256>& patches,
+        const std::array<PatchEntry,256>& patches,
         const std::array<bool,256>& patches_present, int sample_rate)
     {
         return prerender(song, tick_rate, speed, MAX_CHANNELS, patches, patches_present, sample_rate);
@@ -596,7 +608,7 @@ private:
 
     static CachedAudio prerender_sfx(
         const IngameFMSong& song, int tick_rate, int speed,
-        const std::array<YM2612Patch,256>& patches,
+        const std::array<PatchEntry,256>& patches,
         const std::array<bool,256>& patches_present, int sample_rate)
     {
         return prerender(song, tick_rate, speed, 1, patches, patches_present, sample_rate);
@@ -649,11 +661,19 @@ private:
     void commit_keyon() {
         for(int ch=0;ch<MAX_CHANNELS;ch++) {
             if(!pending_[ch].has_note) continue;
-            if(patches_present_[pending_[ch].instId]) {
-                YM2612Patch p=apply_volume(patches_[pending_[ch].instId],pending_[ch].volume);
-                ym_music_->load_patch(p,ch);
+            int instId = pending_[ch].instId;
+            int block  = 0;
+            if(patches_present_[instId]) {
+                const PatchEntry& pe = patches_[instId];
+                block = pe.block;
+                YM2612Patch p = apply_volume(pe.patch, pending_[ch].volume);
+                ym_music_->load_patch(p, ch);
+                ym_music_->enable_lfo(pe.lfo_enable != 0,
+                                      static_cast<uint8_t>(pe.lfo_freq));
             }
-            ym_music_->set_frequency(ch,IngameFMChip::midi_to_hz(pending_[ch].midi_note),0);
+            ym_music_->set_frequency(ch,
+                IngameFMChip::midi_to_hz(pending_[ch].midi_note),
+                block, sample_rate_);
             ym_music_->key_on(ch);
             ch_state_[ch].active=true; pending_[ch].has_note=false;
         }
@@ -681,11 +701,18 @@ private:
     void sfx_commit_keyon(int v) {
         SfxVoiceState& vs=sfx_voice_[v];
         if(!vs.pending_has_note) return;
+        int block = 0;
         if(patches_present_[vs.pending_inst]) {
-            YM2612Patch p=apply_volume(patches_[vs.pending_inst],vs.pending_vol);
-            ym_sfx_->load_patch(p,v);
+            const PatchEntry& pe = patches_[vs.pending_inst];
+            block = pe.block;
+            YM2612Patch p = apply_volume(pe.patch, vs.pending_vol);
+            ym_sfx_->load_patch(p, v);
+            ym_sfx_->enable_lfo(pe.lfo_enable != 0,
+                                 static_cast<uint8_t>(pe.lfo_freq));
         }
-        ym_sfx_->set_frequency(v,IngameFMChip::midi_to_hz(vs.pending_note),0);
+        ym_sfx_->set_frequency(v,
+            IngameFMChip::midi_to_hz(vs.pending_note),
+            block, sample_rate_);
         ym_sfx_->key_on(v);
         vs.pending_has_note=false;
     }
@@ -750,7 +777,7 @@ private:
                 }
             }
             if(!used_cache_music) {
-                if(ym_music_) ym_music_->generate(out, to_generate);
+                if(ym_music_) ym_music_->generate(out, to_generate, sample_rate_);
                 else std::memset(out, 0, n*sizeof(int16_t));
             }
             if(mv<1.0f)
@@ -794,7 +821,7 @@ private:
                     // to_generate <= samples_per_row_ which can exceed 512,
                     // so allocate on heap to avoid stack overflow.
                     if(ym_sfx_) {
-                        ym_sfx_->generate(sfx_scratch_, to_generate);
+                        ym_sfx_->generate(sfx_scratch_, to_generate, sample_rate_);
                         for(int i=0;i<n;++i) {
                             float m=static_cast<float>(out[i])+static_cast<float>(sfx_scratch_[i])*sv;
                             out[i]=static_cast<int16_t>(std::max(-32768.f,std::min(32767.f,m)));
@@ -804,7 +831,7 @@ private:
             } else {
                 // No SFX active — still advance ym_sfx_ clock to keep it in sync
                 if(!(play_cache_||use_cache_) && ym_sfx_) {
-                    ym_sfx_->generate(sfx_scratch_, to_generate);
+                    ym_sfx_->generate(sfx_scratch_, to_generate, sample_rate_);
                 }
             }
 

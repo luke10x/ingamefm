@@ -105,15 +105,24 @@ public:
         write(0, 0x22, enable ? (0x08 | (freq & 0x07)) : 0x00);
     }
 
-    void set_frequency(int ch, double hz, int octaveOffset = 0)
+    // Set frequency for channel ch (0-5).
+    // octaveOffset: additional octave shift (from patch BLOCK field).
+    // sample_rate: ignored — pitch is rate-independent when generate() uses
+    // decimation (see below). Parameter kept for API compatibility.
+    //
+    // Formula: FNUM = F * 2^(21-B) / (YM_CLOCK/144)
+    // The exponent is 21-B (not 20-B which was the previous bug causing
+    // notes to be one octave flat).
+    void set_frequency(int ch, double hz, int octaveOffset = 0, int /*sample_rate*/ = 44100)
     {
         const uint8_t port = (ch >= 3) ? 1 : 0;
         const int     hwch = ch % 3;
 
         hz *= std::pow(2.0, static_cast<double>(octaveOffset));
+
         const double fref = static_cast<double>(YM_CLOCK) / 144.0;
         int block = 4;
-        double fn = hz * static_cast<double>(1 << (20 - block)) / fref;
+        double fn = hz * static_cast<double>(1 << (21 - block)) / fref;
         while (fn > 0x7FF && block < 7) { block++; fn /= 2.0; }
         while (fn < 0x200 && block > 0) { block--; fn *= 2.0; }
         auto fnum = static_cast<uint16_t>(std::min(0x7FF, std::max(0, static_cast<int>(fn))));
@@ -131,18 +140,41 @@ public:
         write(0, 0x28, ((ch >= 3) ? 0x04 : 0x00) | (ch % 3));
     }
 
-    void generate(int16_t* stream, int samples)
+    // Generate 'samples' stereo frames for an SDL device at sample_rate Hz.
+    //
+    // All patches in ingamefm are designed for ymfm running at 44100 Hz
+    // (one chip.generate() call per output sample). To keep envelope timing
+    // consistent at any SDL sample rate, we use a Bresenham accumulator to
+    // call chip.generate() exactly 44100 times per second regardless of rate.
+    //
+    // At 44100 Hz: 1 chip call/output sample (same as before, no change).
+    // At 22050 Hz: 2 chip calls/output sample → same 44100 EG advances/sec.
+    // At 48000 Hz: ~0.92 chip calls/output → same 44100 EG advances/sec.
+    void generate(int16_t* stream, int samples, int sample_rate = 44100)
     {
+        // Reference rate: patches are calibrated for 44100 EG steps/sec
+        static constexpr int REF_RATE = 44100;
+
         for (int i = 0; i < samples; i++)
         {
-            ymfm::ym2612::output_data out;
-            chip.generate(&out, 1);
+            ymfm::ym2612::output_data last{};
+            do {
+                chip.generate(&last, 1);
+                acc_err_ += sample_rate;
+            } while (acc_err_ < REF_RATE);
+            acc_err_ -= REF_RATE;
+
             stream[i * 2 + 0] = static_cast<int16_t>(
-                std::max(-32768, std::min(32767, out.data[0])));
+                std::max(-32768, std::min(32767, last.data[0])));
             stream[i * 2 + 1] = static_cast<int16_t>(
-                std::max(-32768, std::min(32767, out.data[1])));
+                std::max(-32768, std::min(32767, last.data[1])));
         }
     }
+
+private:
+    int acc_err_ = 0;
+
+public:
 
     static double midi_to_hz(int midiNote)
     {

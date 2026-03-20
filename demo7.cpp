@@ -399,6 +399,11 @@ struct SoundSystem
             lastError = std::string("SDL_OpenAudioDevice failed: ") + SDL_GetError();
             return false;
         }
+        // Log if SDL gave a different rate than requested
+        if(obtained.freq != sampleRate) {
+            printf("[demo7] Warning: SDL gave %d Hz instead of requested %d\n",
+                   obtained.freq, sampleRate);
+        }
 
         // Select and start song
         try {
