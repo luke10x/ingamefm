@@ -54,8 +54,6 @@ public:
 
 // -----------------------------------------------------------------------------
 // IngameFMChip  — thin wrapper around ymfm::ym2612
-// Provides register writes, patch loading, frequency setting, key on/off,
-// and stereo sample generation.
 // -----------------------------------------------------------------------------
 
 class IngameFMChip
@@ -64,25 +62,24 @@ public:
     static constexpr uint32_t YM_CLOCK = 7670453;
 
     IngameFMYMInterface intf;
-    // ymfm::ym2612       chip;
-    ymfm::ym3438       chip;
+    ymfm::ym2612        chip;
 
     IngameFMChip() : chip(intf) { chip.reset(); }
 
-    // Write one register (port 0 only — channels 0-2)
     void write(uint8_t port, uint8_t reg, uint8_t val)
     {
         chip.write(port * 2 + 0, reg);
         chip.write(port * 2 + 1, val);
     }
 
-    // Load a YM2612Patch into hardware channel ch (0-5).
-    // ch 0-2 use port 0, ch 3-5 use port 1 (hwch = ch % 3).
     void load_patch(const YM2612Patch& p, int ch)
     {
+        // YM2612 slot order in registers: OP1, OP3, OP2, OP4
+        // Patch array order:              OP1, OP2, OP3, OP4
+        const int slotMap[4] = { 0, 2, 1, 3 };
+
         const uint8_t port = (ch >= 3) ? 1 : 0;
         const int     hwch = ch % 3;
-        const int slotMap[4] = { 0, 2, 1, 3 };
 
         for (int patchOp = 0; patchOp < 4; patchOp++)
         {
@@ -103,13 +100,11 @@ public:
         write(port, 0xB4 + hwch, 0xC0 | ((p.AMS & 0x03) << 4) | (p.FMS & 0x07));
     }
 
-    // Enable/disable LFO
     void enable_lfo(bool enable, uint8_t freq = 0)
     {
         write(0, 0x22, enable ? (0x08 | (freq & 0x07)) : 0x00);
     }
 
-    // Set frequency for channel ch (0-5) given a frequency in Hz.
     void set_frequency(int ch, double hz, int octaveOffset = 0)
     {
         const uint8_t port = (ch >= 3) ? 1 : 0;
@@ -128,7 +123,6 @@ public:
 
     void key_on(int ch)
     {
-        // reg 0x28: bits 1-0 = channel in port, bit 2 = port
         write(0, 0x28, 0xF0 | ((ch >= 3) ? 0x04 : 0x00) | (ch % 3));
     }
 
@@ -137,11 +131,6 @@ public:
         write(0, 0x28, ((ch >= 3) ? 0x04 : 0x00) | (ch % 3));
     }
 
-    // Generate 'samples' stereo frames into a 16-bit interleaved buffer.
-    // ymfm returns int32 sums of all active channels. With 6 channels each
-    // contributing up to ±32767, the raw sum can reach ±196602 — far outside
-    // int16 range. We scale down by 1/6 to guarantee no overflow regardless
-    // of how many channels are playing simultaneously.
     void generate(int16_t* stream, int samples)
     {
         for (int i = 0; i < samples; i++)
@@ -155,17 +144,8 @@ public:
         }
     }
 
-    // Utility: MIDI note → Hz  (A4 = MIDI 69 = 440 Hz)
     static double midi_to_hz(int midiNote)
     {
         return 440.0 * std::pow(2.0, (midiNote - 69) / 12.0);
-    }
-
-    // Utility: furnace note name + octave → MIDI note number
-    // noteName: 0=C,1=C#,2=D,3=D#,4=E,5=F,6=F#,7=G,8=G#,9=A,10=A#,11=B
-    static int note_to_midi(int noteName, int octave)
-    {
-        // MIDI: C0 = 12, so C4 = 60
-        return 12 + octave * 12 + noteName;
     }
 };

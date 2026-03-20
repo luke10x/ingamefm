@@ -19,6 +19,5 @@
 // =============================================================================
 
 #include "ingamefm_patchlib.h"
-// #include "ingamefm_player.h"
-#include "ingamefm_player_cached.h"
+#include "ingamefm_player.h"
 #include "ingamefm_patches.h"
