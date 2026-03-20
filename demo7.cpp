@@ -145,7 +145,7 @@ static const char* AURORA_FRAG =
 // =============================================================================
 // 4. SONG
 //
-// 5 channels, tick_rate=60, speed=6 -> 100ms/row, 32 rows = 3.2s loop
+// 5 channels, tick_rate=60, speed=6 -> 100ms/row, 64 rows = 6.4s loop
 // No "org.tildearrow.furnace" header — parser handles this.
 // Column format: note(3)+inst(2)+vol(2)+effect_dots(4) = 11 chars each.
 //
@@ -156,8 +156,8 @@ static const char* AURORA_FRAG =
 // =============================================================================
 
 static const char* SONG =
-"32\n"
-"C-3007F....|C#30206....|C-3017F....|E-3017F....|G-3017F....\n"
+"64\n"
+"C-3007F....|C#30266....|C-3017F....|E-3017F....|G-3017F....\n"
 "...........|...........|...........|...........|...........\n"
 "...........|...........|...........|...........|...........\n"
 "...........|...........|...........|...........|...........\n"
@@ -188,8 +188,40 @@ static const char* SONG =
 "...........|C#302......|...........|...........|...........\n"
 "...........|...........|...........|...........|...........\n"
 "...........|...........|...........|...........|...........\n"
-"...........|...........|...........|...........|...........\n";
-
+"...........|...........|...........|...........|...........\n"
+"A-300......|C#402......|A-301......|C-301......|E-301......\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"F-300......|C#302......|F-301......|A-301......|C-301......\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+;
 // =============================================================================
 // 5. SFX PATTERNS
 // =============================================================================
@@ -356,7 +388,8 @@ struct SoundSystem
 
     // Settings (set before calling init)
     int sampleRate  = 44100;
-    int bufferFrames = 256;  // must be power-of-2, >= 256 for Web Audio API
+    int bufferFrames = 256;
+    IngameFMChipType chipType = IngameFMChipType::YM3438;  // must be power-of-2, >= 256 for Web Audio API
 
     bool init()
     {
@@ -372,6 +405,7 @@ struct SoundSystem
         bf = p;
 
         player.set_sample_rate(sampleRate);
+        player.set_chip_type(chipType);
 
         // Patches — same IDs as bowling app
         player.add_patch(0x00, PATCH_00);
@@ -489,16 +523,21 @@ struct AppState
     bool   running   = true;
 
     // UI state
-    int  selectedRate   = 1;   // index into RATES[]
+    int  selectedRate   = 2;   // index into RATES[] — default 44100 Hz
     int  selectedBuf    = 1;   // index into BUFS[]
+    int  selectedChip   = 0;   // index into CHIPS[] — default YM3438 (clean)
 };
 
 static AppState g_app;
 
-static const int  RATES[]     = { 22050, 44100, 48000 };
-static const char* RATE_LBLS[]= { "22050 Hz", "44100 Hz", "48000 Hz" };
+static const int  RATES[]     = { 11025, 22050, 44100, 48000 };
+static const char* RATE_LBLS[]= { "11025 Hz", "22050 Hz", "44100 Hz", "48000 Hz" };
 static const int  BUFS[]      = { 256, 512, 1024, 2048 };
 static const char* BUF_LBLS[] = { "256", "512", "1024", "2048" };
+
+// Cleanest first
+static const IngameFMChipType CHIPS[]  = { IngameFMChipType::YM3438, IngameFMChipType::YM2612 };
+static const char* CHIP_LBLS[]         = { "YM3438 — Clean", "YM2612 — Authentic Sega" };
 
 // =============================================================================
 // 11. PANEL
@@ -528,7 +567,7 @@ static void drawPanel(AppState& app)
     ImGui::SameLine();
     ImGui::SetNextItemWidth(110.f);
     if(ImGui::BeginCombo("##rate", RATE_LBLS[app.selectedRate])) {
-        for(int i=0;i<3;i++) {
+        for(int i=0;i<4;i++) {
             bool sel=(i==app.selectedRate);
             if(ImGui::Selectable(RATE_LBLS[i],sel)) app.selectedRate=i;
             if(sel) ImGui::SetItemDefaultFocus();
@@ -547,6 +586,19 @@ static void drawPanel(AppState& app)
         }
         ImGui::EndCombo();
     }
+    ImGui::Spacing();
+    ImGui::Text("Chip");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-1.f);
+    if(ImGui::BeginCombo("##chip", CHIP_LBLS[app.selectedChip])) {
+        for(int i=0;i<2;i++) {
+            bool sel=(i==app.selectedChip);
+            if(ImGui::Selectable(CHIP_LBLS[i],sel)) app.selectedChip=i;
+            if(sel) ImGui::SetItemDefaultFocus();
+
+        }
+        ImGui::EndCombo();
+    }
     ImGui::EndDisabled();
 
     ImGui::Spacing();
@@ -555,6 +607,7 @@ static void drawPanel(AppState& app)
         if(ImGui::Button("Init Sound System", ImVec2(-1, 0))) {
             app.sound.sampleRate   = RATES[app.selectedRate];
             app.sound.bufferFrames = BUFS[app.selectedBuf];
+            app.sound.chipType     = CHIPS[app.selectedChip];
             if(!app.sound.init()) {
                 fprintf(stderr, "[demo7] Init failed: %s\n",
                         app.sound.lastError.c_str());
@@ -583,6 +636,7 @@ static void drawPanel(AppState& app)
             app.sound.bufferFrames,
             app.sound.player.get_current_row(),
             app.sound.player.get_song_length());
+        ImGui::TextDisabled("%s", CHIP_LBLS[app.selectedChip]);
 
         ImGui::Separator();
 

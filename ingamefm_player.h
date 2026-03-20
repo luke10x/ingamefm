@@ -140,6 +140,14 @@ public:
     }
     int get_sample_rate() const { return sample_rate_; }
 
+    // Set chip type — call before start(), requires teardown+reinit to take effect.
+    void set_chip_type(IngameFMChipType t) {
+        chip_type_ = t;
+        if(ym_music_) ym_music_->set_chip_type(t);
+        if(ym_sfx_)   ym_sfx_->set_chip_type(t);
+    }
+    IngameFMChipType get_chip_type() const { return chip_type_; }
+
     void set_music_volume(float v) { music_vol_.store(std::max(0.f,std::min(1.f,v))); }
     void set_sfx_volume  (float v) { sfx_vol_  .store(std::max(0.f,std::min(1.f,v))); }
 
@@ -352,6 +360,7 @@ public:
         current_song_id_=-1;
         music_vol_.store(1.0f); sfx_vol_.store(1.0f);
         build_cache_=false; play_cache_=false; use_cache_=false;
+        chip_type_=IngameFMChipType::YM3438;
         // sample_rate_ intentionally kept — caller sets it again before re-init
     }
 
@@ -477,6 +486,7 @@ private:
     std::atomic<float> sfx_vol_  {1.0f};
 
     int sample_rate_ = 44100;
+    IngameFMChipType chip_type_ = IngameFMChipType::YM3438;
     static constexpr int KEY_OFF_GAP_SAMPLES = 44;
     // Pre-allocated scratch buffer for SFX generate — avoids heap alloc per callback.
     // Sized for max samples_per_row at 48000 Hz with speed=12: 48000/60*12 = 9600 frames.
@@ -494,6 +504,8 @@ private:
         if(ym_music_) return;
         ym_music_=std::make_unique<IngameFMChip>();
         ym_sfx_  =std::make_unique<IngameFMChip>();
+        ym_music_->set_chip_type(chip_type_);
+        ym_sfx_->set_chip_type(chip_type_);
         init_panning();
     }
 

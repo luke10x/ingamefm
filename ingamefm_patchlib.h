@@ -56,20 +56,96 @@ public:
 // IngameFMChip  — thin wrapper around ymfm::ym2612
 // -----------------------------------------------------------------------------
 
-class IngameFMChip
+// Supported OPN2-family chip types (all share the same 6-ch FM register layout)
+enum class IngameFMChipType {
+    YM2612,  // OPN2  — Sega Mega Drive, authentic dirty DAC
+    YM3438,  // OPN2C — CMOS, clean
+};
+
+// Forward-declare the template; specializations below
+template<IngameFMChipType TYPE = IngameFMChipType::YM2612>
+class IngameFMChipImpl;
+
+// ── YM2612 ──────────────────────────────────────────────────────────────────
+template<> class IngameFMChipImpl<IngameFMChipType::YM2612>
 {
 public:
     static constexpr uint32_t YM_CLOCK = 7670453;
-
     IngameFMYMInterface intf;
-    ymfm::ym2612        chip;
+    ymfm::ym2612 chip;
+    IngameFMChipImpl() : chip(intf) { chip.reset(); }
+    void raw_write(uint8_t addr, uint8_t data) { chip.write(addr, data); }
+    void raw_generate(ymfm::ym2612::output_data& out) { chip.generate(&out, 1); }
+    void reset() { chip.reset(); }
+};
 
-    IngameFMChip() : chip(intf) { chip.reset(); }
+// ── YM3438 ──────────────────────────────────────────────────────────────────
+template<> class IngameFMChipImpl<IngameFMChipType::YM3438>
+{
+public:
+    static constexpr uint32_t YM_CLOCK = 7670453;
+    IngameFMYMInterface intf;
+    ymfm::ym3438 chip;
+    IngameFMChipImpl() : chip(intf) { chip.reset(); }
+    void raw_write(uint8_t addr, uint8_t data) { chip.write(addr, data); }
+    void raw_generate(ymfm::ym3438::output_data& out) { chip.generate(&out, 1); }
+    void reset() { chip.reset(); }
+};
 
-    void write(uint8_t port, uint8_t reg, uint8_t val)
-    {
-        chip.write(port * 2 + 0, reg);
-        chip.write(port * 2 + 1, val);
+// IngameFMChip — runtime-selectable chip type wrapper
+class IngameFMChip
+{
+public:
+    static constexpr uint32_t YM_CLOCK = 7670453; // used for FNUM (always 2612 clock)
+
+    IngameFMChipType chip_type = IngameFMChipType::YM3438;
+
+    // Chip instances — only one is active at a time based on chip_type
+    IngameFMChipImpl<IngameFMChipType::YM2612> chip2612;
+    IngameFMChipImpl<IngameFMChipType::YM3438> chip3438;
+
+    IngameFMChip() { reset_chip(); }
+
+    void set_chip_type(IngameFMChipType t) {
+        chip_type = t;
+        reset_chip();
+    }
+
+    void reset_chip() {
+        switch(chip_type) {
+            case IngameFMChipType::YM2612: chip2612.reset(); break;
+            case IngameFMChipType::YM3438: chip3438.reset(); break;
+        }
+    }
+
+    void write(uint8_t port, uint8_t reg, uint8_t val) {
+        uint8_t addr = port * 2;
+        switch(chip_type) {
+            case IngameFMChipType::YM2612:
+                chip2612.chip.write(addr,   reg);
+                chip2612.chip.write(addr+1, val); break;
+            case IngameFMChipType::YM3438:
+                chip3438.chip.write(addr,   reg);
+                chip3438.chip.write(addr+1, val); break;
+        }
+    }
+
+    void do_generate(int16_t* L, int16_t* R) {
+        int32_t l=0, r=0;
+        switch(chip_type) {
+            case IngameFMChipType::YM2612: {
+                ymfm::ym2612::output_data out;
+                chip2612.chip.generate(&out, 1);
+                l=out.data[0]; r=out.data[1]; break;
+            }
+            case IngameFMChipType::YM3438: {
+                ymfm::ym3438::output_data out;
+                chip3438.chip.generate(&out, 1);
+                l=out.data[0]; r=out.data[1]; break;
+            }
+        }
+        *L = static_cast<int16_t>(std::max(-32768, std::min(32767, l)));
+        *R = static_cast<int16_t>(std::max(-32768, std::min(32767, r)));
     }
 
     void load_patch(const YM2612Patch& p, int ch)
@@ -153,22 +229,17 @@ public:
     // At 48000 Hz: ~0.92 chip calls/output → same 44100 EG advances/sec.
     void generate(int16_t* stream, int samples, int sample_rate = 44100)
     {
-        // Reference rate: patches are calibrated for 44100 EG steps/sec
         static constexpr int REF_RATE = 44100;
-
         for (int i = 0; i < samples; i++)
         {
-            ymfm::ym2612::output_data last{};
+            int16_t L, R;
             do {
-                chip.generate(&last, 1);
+                do_generate(&L, &R);
                 acc_err_ += sample_rate;
             } while (acc_err_ < REF_RATE);
             acc_err_ -= REF_RATE;
-
-            stream[i * 2 + 0] = static_cast<int16_t>(
-                std::max(-32768, std::min(32767, last.data[0])));
-            stream[i * 2 + 1] = static_cast<int16_t>(
-                std::max(-32768, std::min(32767, last.data[1])));
+            stream[i * 2 + 0] = L;
+            stream[i * 2 + 1] = R;
         }
     }
 
