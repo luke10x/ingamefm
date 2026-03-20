@@ -720,6 +720,12 @@ static void drawPanel(AppState& app)
             }
         }
         ImGui::EndDisabled();
+        // Rate mismatch warning
+        if(s.allCached() && s.cachedRate>0 && RATES[app.selectedRate]!=s.cachedRate) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f,0.75f,0.1f,1.f));
+            ImGui::TextWrapped("Note: cached at %d Hz — rate will be forced to match.", s.cachedRate);
+            ImGui::PopStyleColor();
+        }
         if(app.showError && !s.lastError.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f,0.3f,0.3f,1.f));
             ImGui::TextWrapped("%s", s.lastError.c_str());

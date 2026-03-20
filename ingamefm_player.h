@@ -876,7 +876,15 @@ private:
             // In cache mode there is no key_off gap — the gap is pre-baked.
             // Always use samples_per_row_ as the boundary.
             bool in_gap       = !(play_cache_||use_cache_) && (pos_in_row < KEY_OFF_GAP_SAMPLES);
-            int  next_boundary= in_gap ? KEY_OFF_GAP_SAMPLES : samples_per_row_;
+            // In cached playback, use the cache's own spr so tempo matches exactly
+            // what was recorded regardless of any re-definition at a different rate.
+            int  cache_spr    = samples_per_row_;
+            if((play_cache_||use_cache_) && current_song_id_>=0) {
+                auto cit = song_cache_.find(current_song_id_);
+                if(cit!=song_cache_.end() && cit->second.valid)
+                    cache_spr = cit->second.samples_per_row;
+            }
+            int  next_boundary= in_gap ? KEY_OFF_GAP_SAMPLES : cache_spr;
             int  to_generate  = std::min(remaining, next_boundary-pos_in_row);
             const float mv    = music_vol_.load();
             const float sv    = sfx_vol_.load();
@@ -992,7 +1000,7 @@ private:
                 if(in_gap && sample_in_row_>=KEY_OFF_GAP_SAMPLES) commit_keyon();
             }
 
-            if(sample_in_row_>=samples_per_row_) {
+            if(sample_in_row_>=cache_spr) {
                 sample_in_row_=0;
                 int row=current_row_.load()+1;
 
