@@ -223,6 +223,41 @@ static const char* SONG =
 "...........|...........|...........|...........|...........\n"
 "...........|...........|...........|...........|...........\n"
 ;
+
+// =============================================================================
+// 4b. SONG 2 — drum/percussion loop
+//
+// 4 channels, tick_rate=60, speed=4 -> ~66ms/row, 16 rows = ~1.06s loop
+// Instruments:
+//   20 = PATCH_KICK
+//   21 = PATCH_SNARE
+//   22 = PATCH_HIHAT
+//   23 = PATCH_CLANG
+// =============================================================================
+
+static const char* SONG2 =
+"16\n"
+"C-3207F....|...........|C-3227F....|...........\n"
+"...........|...........|...........|...........\n"
+"...........|C-3217F....|...........|C-3237F....\n"
+"...........|...........|...........|...........\n"
+"C-3207F....|...........|C-3227F....|...........\n"
+"...........|...........|...........|...........\n"
+"...........|C-3217F....|...........|...........\n"
+"...........|...........|C-3227F....|...........\n"
+"C-3207F....|...........|...........|C-3237F....\n"
+"...........|...........|C-3227F....|...........\n"
+"...........|C-3217F....|...........|...........\n"
+"...........|...........|...........|...........\n"
+"C-3207F....|...........|C-3227F....|...........\n"
+"...........|...........|...........|...........\n"
+"...........|C-3217F....|...........|C-3237F....\n"
+"...........|...........|C-3227F....|...........\n"
+;
+
+static constexpr int SONG_ID_1 = 1;
+static constexpr int SONG_ID_2 = 2;
+
 // =============================================================================
 // 5. SFX PATTERNS
 // =============================================================================
@@ -409,47 +444,78 @@ struct SoundSystem
     bool              isLive  = true;
     std::string       lastError;
 
+    // Which song is currently active
+    int               currentSongId = SONG_ID_1;
+
     // Cached rate — survives teardown
     int               cachedRate = 0;
+
+    // Per-song cache progress (main thread only)
+    int               song1RowsDone = 0;
+    int               song2RowsDone = 0;
+    bool              song1Cached   = false;
+    bool              song2Cached   = false;
 
     // Settings
     int              sampleRate   = 44100;
     int              bufferFrames = 256;
     IngameFMChipType chipType     = IngameFMChipType::YM3438;
 
-    // ── Cache state queries (thread-safe reads) ───────────────────────────────
+    // ── Cache state queries ───────────────────────────────────────────────────
     bool isCapturePending()  const { return running && isLive && player.is_capture_pending(); }
     bool isCaching()         const { return running && isLive && player.is_capturing(); }
     bool isCaptureSession()  const { return running && isLive && player.is_capture_session(); }
 
-    // Song: rows done / total
-    int songRowsDone()  const { return player.capture_song_rows_done(); }
-    int songRowsTotal() const { return player.get_song_length(); }
-    bool songCached()   const { return player.is_song_captured(); }
+    // Active recording progress (for the currently-recording song)
+    int  captureRowsDone()  const { return player.capture_song_rows_done(); }
+    bool captureComplete()  const { return player.is_song_captured(); }
 
-    // SFX: rows done / total per id
-    int sfxRowsDone(int id)  const { return player.capture_sfx_rows_done(id); }
-    int sfxRowsTotal(int id) const { return player.capture_sfx_total_rows(id); }
-    bool sfxCached(int id)   const {
+    // SFX cache
+    int  sfxRowsDone(int id)  const { return player.capture_sfx_rows_done(id); }
+    int  sfxRowsTotal(int id) const { return player.capture_sfx_total_rows(id); }
+    bool sfxCached(int id)    const {
         int t = sfxRowsTotal(id);
         return t > 0 && sfxRowsDone(id) >= t;
     }
 
     bool allCached() const {
-        if(!songCached()) return false;
-        for(auto& s : SFX_LIST) if(!sfxCached(s.id)) return false;
+        if(!song1Cached) return false;
+        if(!song2Cached) return false;
+        for(int i = 0; i < SFX_COUNT; i++)
+            if(!sfxCached(SFX_LIST[i].id)) return false;
         return true;
     }
-    // Called from main thread after allCached() becomes true
+
     void onCacheComplete() {
         if(allCached() && cachedRate == 0) cachedRate = sampleRate;
     }
 
+    // Called every frame from main thread — syncs per-song capture progress
+    void tickCacheProgress() {
+        if(!running || !isLive) return;
+        int  rows = captureRowsDone();
+        bool done = captureComplete();
+        if(currentSongId == SONG_ID_1) {
+            song1RowsDone = rows;
+            if(done) song1Cached = true;
+        } else {
+            song2RowsDone = rows;
+            if(done) song2Cached = true;
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
     void loadPatches() {
+        // Song 1 instruments
         player.add_patch(0x00, PATCH_00);
         player.add_patch(0x01, PATCH_01);
         player.add_patch(0x02, PATCH_HIHAT);
+        // Song 2 instruments
+        player.add_patch(0x20, PATCH_KICK);
+        player.add_patch(0x21, PATCH_SNARE);
+        player.add_patch(0x22, PATCH_HIHAT);
+        player.add_patch(0x23, PATCH_CLANG);
+        // SFX instruments
         player.add_patch(0x11, PATCH_HIHAT);
         player.add_patch(0x12, PATCH_CLANG);
         player.add_patch(0x14, PATCH_ELECTRIC_BASS);
@@ -457,9 +523,11 @@ struct SoundSystem
     }
 
     void defineSounds() {
-        player.song_define(1, SONG, 60, 6);
-        for(auto& s : SFX_LIST)
-            player.sfx_define(s.id, s.pattern, s.tick, s.speed);
+        player.song_define(SONG_ID_1, SONG,  60, 6);
+        player.song_define(SONG_ID_2, SONG2, 60, 4);
+        for(int i = 0; i < SFX_COUNT; i++)
+            player.sfx_define(SFX_LIST[i].id, SFX_LIST[i].pattern,
+                              SFX_LIST[i].tick, SFX_LIST[i].speed);
     }
 
     bool openDevice() {
@@ -484,8 +552,8 @@ struct SoundSystem
     bool startLive() {
         if(running) teardown();
         lastError.clear();
-        // reset_keep_cache preserves any recorded cache and capture progress
-        player.reset_keep_cache();
+        currentSongId = SONG_ID_1;
+        player.reset();
         player.set_sample_rate(sampleRate);
         player.set_chip_type(chipType);
         player.set_build_cache(false);
@@ -494,7 +562,7 @@ struct SoundSystem
         try { defineSounds(); }
         catch(const std::exception& e) { lastError = e.what(); return false; }
         if(!openDevice()) return false;
-        player.song_select(1, true);
+        player.song_select(SONG_ID_1, true);
         player.start(dev, true);
         SDL_PauseAudioDevice(dev, 0);
         running = true; isLive = true;
@@ -502,11 +570,21 @@ struct SoundSystem
         return true;
     }
 
-    // ── Recording control ────────────────────────────────────────────────────
+    // ── Song switching (call from main thread — uses audio lock internally) ───
+    void changeSong(int id, bool now) {
+        if(!running || !isLive) return;
+        SongChangeWhen when = now ? SongChangeWhen::NOW : SongChangeWhen::AT_PATTERN_END;
+        SDL_LockAudioDevice(dev);
+        player.change_song(id, when);
+        SDL_UnlockAudioDevice(dev);
+        currentSongId = id;
+    }
+
+    // ── Recording control ─────────────────────────────────────────────────────
     void startCapture() {
         if(!running || !isLive) return;
         SDL_LockAudioDevice(dev);
-        player.request_capture();  // begins at next loop boundary
+        player.request_capture();
         SDL_UnlockAudioDevice(dev);
         printf("[demo7] Capture requested (pending next loop)\n");
     }
@@ -519,7 +597,7 @@ struct SoundSystem
         printf("[demo7] Capture cancelled\n");
     }
 
-    // ── Start cached ─────────────────────────────────────────────────────────
+    // ── Start cached ──────────────────────────────────────────────────────────
     bool startCached() {
         if(cachedRate == 0) { lastError = "No cache recorded yet."; return false; }
         if(sampleRate != cachedRate) {
@@ -527,7 +605,6 @@ struct SoundSystem
             return false;
         }
         if(running) {
-            // Stop audio device but preserve player state (cache lives in player)
             if(dev) { player.stop(dev); SDL_CloseAudioDevice(dev); dev=0; }
             running = false;
         }
@@ -536,7 +613,8 @@ struct SoundSystem
         player.set_sample_rate(sampleRate);
         player.set_chip_type(chipType);
         if(!openDevice()) return false;
-        player.song_select(1, true);
+        player.song_select(SONG_ID_1, true);
+        currentSongId = SONG_ID_1;
         player.start(dev, true);
         SDL_PauseAudioDevice(dev, 0);
         running = true; isLive = false;
@@ -544,11 +622,10 @@ struct SoundSystem
         return true;
     }
 
-    // ── Teardown ─────────────────────────────────────────────────────────────
+    // ── Teardown ──────────────────────────────────────────────────────────────
     void teardown() {
         if(!running) return;
         if(dev) { player.stop(dev); SDL_CloseAudioDevice(dev); dev=0; }
-        // Don't reset player — preserve cache
         player.set_play_cache(false);
         player.cancel_capture();
         running = false;
@@ -768,31 +845,99 @@ static void drawPanel(AppState& app)
     }
 
     // =========================================================================
-    // SECTION 3 — CACHE
-    // Always visible. Shows recording progress for song and each SFX.
-    // Record button only available in Live Synthesis mode.
+    // SECTION 3 — SONGS
+    // Song switching + per-song cache progress.
     // =========================================================================
-    ImGui::SeparatorText("Cache");
-
-    // Progress bars
+    ImGui::SeparatorText("Songs");
     {
         char overlay[72];
-        // Song
+
+        // Song 1
         {
-            int done=s.songRowsDone(), total=s.songRowsTotal();
-            bool ok=s.songCached();
-            float frac=(total>0)?(float)done/total:0.f;
-            const char* status = ok?"done":capActive?"recording...":capPend?"waiting...":"";
-            snprintf(overlay,sizeof(overlay),"Song  %d/%d  %s",done,total>0?total:0,status);
-            ImVec4 col = ok?ImVec4(0.2f,0.7f,0.2f,1.f):capPend?ImVec4(0.35f,0.35f,0.35f,1.f):ImVec4(0.45f,0.4f,0.1f,1.f);
-            ImGui::PushStyleColor(ImGuiCol_PlotHistogram,col);
-            ImGui::ProgressBar(frac,ImVec2(-1,0),overlay);
+            bool isCur  = (s.currentSongId == SONG_ID_1);
+            int  done   = isCur ? s.captureRowsDone() : s.song1RowsDone;
+            bool cached = s.song1Cached;
+            if(cached) done = 64;
+            float frac = (float)done / 64.f;
+            if(frac > 1.f) frac = 1.f;
+            const char* status = cached              ? "cached"
+                               : (capActive && isCur) ? "recording..."
+                               : (capPend   && isCur) ? "waiting..."
+                               : "";
+            snprintf(overlay, sizeof(overlay), "Song 1  %d/64  %s", done, status);
+            ImVec4 col = cached                      ? ImVec4(0.2f,0.7f,0.2f,1.f)
+                       : (capPend   && isCur)        ? ImVec4(0.35f,0.35f,0.35f,1.f)
+                       : (capActive && isCur)        ? ImVec4(0.7f,0.5f,0.1f,1.f)
+                       :                               ImVec4(0.45f,0.4f,0.1f,1.f);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, col);
+            ImGui::ProgressBar(frac, ImVec2(-1,0), overlay);
             ImGui::PopStyleColor();
         }
-        // SFX
+        // Song 2
+        {
+            bool isCur  = (s.currentSongId == SONG_ID_2);
+            int  done   = isCur ? s.captureRowsDone() : s.song2RowsDone;
+            bool cached = s.song2Cached;
+            if(cached) done = 16;
+            float frac = (float)done / 16.f;
+            if(frac > 1.f) frac = 1.f;
+            const char* status = cached              ? "cached"
+                               : (capActive && isCur) ? "recording..."
+                               : (capPend   && isCur) ? "waiting..."
+                               : "";
+            snprintf(overlay, sizeof(overlay), "Song 2  %d/16  %s", done, status);
+            ImVec4 col = cached                      ? ImVec4(0.2f,0.7f,0.2f,1.f)
+                       : (capPend   && isCur)        ? ImVec4(0.35f,0.35f,0.35f,1.f)
+                       : (capActive && isCur)        ? ImVec4(0.7f,0.5f,0.1f,1.f)
+                       :                               ImVec4(0.45f,0.4f,0.1f,1.f);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, col);
+            ImGui::ProgressBar(frac, ImVec2(-1,0), overlay);
+            ImGui::PopStyleColor();
+        }
+
+        // Song switching — only in live mode
+        if(isLive) {
+            ImGui::Spacing();
+            // Show which song is current
+            if(s.currentSongId == SONG_ID_1) {
+                ImGui::TextDisabled("Playing: Song 1");
+            } else {
+                ImGui::TextDisabled("Playing: Song 2");
+            }
+            // Switch buttons — one row each for the other song
+            float hw = (panelW - 40.f) * 0.5f;
+            if(s.currentSongId != SONG_ID_1) {
+                ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.2f,0.3f,0.45f,1.f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f,0.45f,0.65f,1.f));
+                if(ImGui::Button("Song 1 — Now",         ImVec2(hw,0))) s.changeSong(SONG_ID_1, true);
+                ImGui::SameLine();
+                if(ImGui::Button("Song 1 — At Loop End", ImVec2(-1,0))) s.changeSong(SONG_ID_1, false);
+                ImGui::PopStyleColor(2);
+            }
+            if(s.currentSongId != SONG_ID_2) {
+                ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.2f,0.3f,0.45f,1.f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f,0.45f,0.65f,1.f));
+                if(ImGui::Button("Song 2 — Now",         ImVec2(hw,0))) s.changeSong(SONG_ID_2, true);
+                ImGui::SameLine();
+                if(ImGui::Button("Song 2 — At Loop End", ImVec2(-1,0))) s.changeSong(SONG_ID_2, false);
+                ImGui::PopStyleColor(2);
+            }
+        }
+    }
+
+    // =========================================================================
+    // SECTION 4 — CACHE
+    // SFX bars + record controls.
+    // =========================================================================
+    ImGui::SeparatorText("Cache");
+    {
+        char overlay[72];
         bool sessionOn = s.isCaptureSession();
-        for(auto& info:SFX_LIST) {
-            int done=s.sfxRowsDone(info.id),total=s.sfxRowsTotal(info.id);
+
+        // SFX bars
+        for(int i = 0; i < SFX_COUNT; i++) {
+            const SfxInfo& info = SFX_LIST[i];
+            int done=s.sfxRowsDone(info.id), total=s.sfxRowsTotal(info.id);
             bool ok=s.sfxCached(info.id);
             float frac=(total>0)?(float)done/total:0.f;
             const char* status=ok?"done":sessionOn?"trigger to record":capPend?"waiting...":"";
@@ -808,18 +953,19 @@ static void drawPanel(AppState& app)
             ImGui::TextDisabled("No cache recorded");
     }
 
-    // Record / Stop recording / Re-record — only in Live mode
+    // Record controls — only in Live mode
     if(isLive) {
         ImGui::Spacing();
-        if(!allCached) {
-            bool isPending=s.isCapturePending();
+        bool curCached = (s.currentSongId == SONG_ID_1) ? s.song1Cached : s.song2Cached;
+        if(!curCached) {
+            bool isPending = s.isCapturePending();
             if(!capActive && !isPending) {
                 ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.45f,0.15f,0.0f,1.f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.65f,0.28f,0.0f,1.f));
-                if(ImGui::Button("Record Cache", ImVec2(-1,0))) s.startCapture();
+                if(ImGui::Button("Record Current Song + SFX", ImVec2(-1,0))) s.startCapture();
                 ImGui::PopStyleColor(2);
             } else {
-                const char* lbl=isPending?"Stop Recording  (waiting for next loop...)":"Stop Recording";
+                const char* lbl = isPending ? "Stop Recording  (waiting for next loop...)" : "Stop Recording";
                 ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.5f,0.05f,0.05f,1.f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f,0.1f, 0.1f,1.f));
                 if(ImGui::Button(lbl, ImVec2(-1,0))) s.cancelCapture();
@@ -828,15 +974,20 @@ static void drawPanel(AppState& app)
         } else {
             ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.22f,0.22f,0.22f,1.f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f,0.35f,0.35f,1.f));
-            if(ImGui::Button("Re-record Cache", ImVec2(-1,0))) {
-                s.cachedRate=0; s.startCapture();
+            if(ImGui::Button("Re-record Current Song", ImVec2(-1,0))) {
+                if(s.currentSongId == SONG_ID_1) { s.song1Cached = false; s.song1RowsDone = 0; }
+                else                              { s.song2Cached = false; s.song2RowsDone = 0; }
+                if(!s.song1Cached || !s.song2Cached) s.cachedRate = 0;
+                s.startCapture();
             }
             ImGui::PopStyleColor(2);
         }
+        if(!allCached)
+            ImGui::TextDisabled("Switch songs to record each one.");
     }
 
     // =========================================================================
-    // SECTION 4 — MIXER  (only while running)
+    // SECTION 5 — MIXER  (only while running)
     // Volume sliders + LFO for both chips.
     // =========================================================================
     if(running) {
@@ -879,7 +1030,7 @@ static void drawPanel(AppState& app)
         }
 
         // =========================================================================
-        // SECTION 5 — SOUND EFFECTS  (only while running)
+        // SECTION 6 — SOUND EFFECTS  (only while running)
         // =========================================================================
         ImGui::SeparatorText("Sound Effects");
         struct SfxBtn{int id;int pri;int dur;const char* label;ImVec4 col;};
@@ -904,7 +1055,7 @@ static void drawPanel(AppState& app)
     }
 
     // =========================================================================
-    // SECTION 6 — INSTRUMENTS  (hidden in Cached Playback mode)
+    // SECTION 7 — INSTRUMENTS  (hidden in Cached Playback mode)
     // Patch editors open as floating windows.
     // =========================================================================
     bool canEdit = stopped || isLive;
@@ -975,7 +1126,8 @@ static void mainTick()
         app.lastDisplay = now;
     }
 
-    // Check if cache just became complete
+    // Sync per-song cache progress and check completion
+    app.sound.tickCacheProgress();
     if(app.sound.allCached()) app.sound.onCacheComplete();
 
     SDL_Event e;

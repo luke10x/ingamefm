@@ -17,7 +17,6 @@
 #include "ingamefm_patchlib.h"
 
 #include <string>
-#include <sstream>
 #include <vector>
 #include <cstring>
 #include <cstdio>
@@ -34,41 +33,26 @@ struct IngameFMSerializer
                                  int lfoEnable  = 0,
                                  int lfoFreq    = 0)
     {
-        std::ostringstream o;
-        o << "constexpr YM2612Patch " << name << " =\n"
-          << "{\n"
-          << "    .ALG = " << patch.ALG << ",\n"
-          << "    .FB  = " << patch.FB  << ",\n"
-          << "    .AMS = " << patch.AMS << ",\n"
-          << "    .FMS = " << patch.FMS << ",\n"
-          << "\n"
-          << "    .op =\n"
-          << "    {\n";
-        for (int i = 0; i < 4; ++i)
-        {
+        char buf[4096]; int n = 0; const char* nm = name.c_str();
+        n += snprintf(buf+n,(int)(sizeof(buf)-n),
+            "constexpr YM2612Patch %s =\n{\n"
+            "    .ALG = %d,\n    .FB  = %d,\n    .AMS = %d,\n    .FMS = %d,\n\n"
+            "    .op =\n    {\n", nm, patch.ALG, patch.FB, patch.AMS, patch.FMS);
+        for (int i = 0; i < 4; ++i) {
             const auto& op = patch.op[i];
-            o << "        { "
-              << ".DT = "  << op.DT  << ", "
-              << ".MUL = " << op.MUL << ", "
-              << ".TL = "  << op.TL  << ", "
-              << ".RS = "  << op.RS  << ", "
-              << ".AR = "  << op.AR  << ", "
-              << ".AM = "  << op.AM  << ", "
-              << ".DR = "  << op.DR  << ", "
-              << ".SR = "  << op.SR  << ", "
-              << ".SL = "  << op.SL  << ", "
-              << ".RR = "  << op.RR  << ", "
-              << ".SSG = " << op.SSG
-              << " }";
-            if (i < 3) o << ",";
-            o << "\n";
+            n += snprintf(buf+n,(int)(sizeof(buf)-n),
+                "        { .DT = %d, .MUL = %d, .TL = %d, .RS = %d, .AR = %d,"
+                " .AM = %d, .DR = %d, .SR = %d, .SL = %d, .RR = %d, .SSG = %d }%s\n",
+                op.DT, op.MUL, op.TL, op.RS, op.AR,
+                op.AM, op.DR, op.SR, op.SL, op.RR, op.SSG, i < 3 ? "," : "");
         }
-        o << "    }\n"
-          << "};\n"
-          << "constexpr int " << name << "_BLOCK = "      << block     << ";      // Octave offset\n"
-          << "constexpr int " << name << "_LFO_ENABLE = " << lfoEnable << "; // LFO on/off\n"
-          << "constexpr int " << name << "_LFO_FREQ = "   << lfoFreq   << ";   // LFO frequency (0-7)";
-        return o.str();
+        n += snprintf(buf+n,(int)(sizeof(buf)-n),
+            "    }\n};\n"
+            "constexpr int %s_BLOCK = %d;      // Octave offset\n"
+            "constexpr int %s_LFO_ENABLE = %d; // LFO on/off\n"
+            "constexpr int %s_LFO_FREQ = %d;   // LFO frequency (0-7)",
+            nm, block, nm, lfoEnable, nm, lfoFreq);
+        return std::string(buf, n);
     }
 
     // -------------------------------------------------------------------------
@@ -94,12 +78,15 @@ struct IngameFMSerializer
         bool inOpArray = false;
         int  opCount   = 0;
 
-        // Split into lines
+        // Split into lines (no std::istringstream — WASM-safe)
         std::vector<std::string> lines;
         {
-            std::istringstream ss(code);
             std::string ln;
-            while (std::getline(ss, ln)) lines.push_back(ln);
+            for (char c : code) {
+                if (c == '\n') { lines.push_back(ln); ln.clear(); }
+                else if (c != '\r') ln += c;
+            }
+            if (!ln.empty()) lines.push_back(ln);
         }
 
         for (int li = 0; li < (int)lines.size(); ++li)

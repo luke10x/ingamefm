@@ -1,5 +1,4 @@
 #pragma once
-#include <sstream>
 // =============================================================================
 // ingamefm_player.h — Configurable Sample Rate Version
 // =============================================================================
@@ -73,7 +72,7 @@ static IngameFMEvent parse_channel_column(const std::string& row, size_t colStar
 
 static IngameFMSong parse_ingamefm_song(const std::string& text) {
     std::vector<std::string> lines;
-    { std::istringstream ss(text); std::string l; while(std::getline(ss,l)) lines.push_back(trim_right(l)); }
+    { std::string l; for(char c:text){if(c=='\n'){lines.push_back(trim_right(l));l.clear();}else if(c!='\r')l+=c;} if(!l.empty())lines.push_back(trim_right(l)); }
     while (!lines.empty()&&lines.front().empty()) lines.erase(lines.begin());
     if (lines.empty()) throw std::runtime_error("Song text is empty");
     int lineNum=1;
