@@ -433,41 +433,18 @@ public:
     // Prefer set_build_cache() / set_play_cache() for finer control.
     bool use_cache_ = false;
 
-    // reset_keep_cache() — like reset() but preserves song_cache_, sfx_cache_,
-    // and all capture progress state. Use when restarting live playback without
-    // invalidating a previously recorded cache.
-    void reset_keep_cache() {
-        // Save cache and capture state
-        auto saved_song_cache        = std::move(song_cache_);
-        auto saved_sfx_cache         = std::move(sfx_cache_);
-        bool saved_song_done         = capture_song_done_;
-        bool saved_session           = capture_session_active_;
-        int  saved_voices_cap        = sfx_voices_captured_;
-        int  saved_song_rows         = capture_song_rows_done_.load();
-        auto saved_sfx_rows          = capture_sfx_rows_done_;
-
-        reset();
-
-        // Restore
-        song_cache_                  = std::move(saved_song_cache);
-        sfx_cache_                   = std::move(saved_sfx_cache);
-        capture_song_done_           = saved_song_done;
-        capture_session_active_      = saved_session;
-        sfx_voices_captured_         = saved_voices_cap;
-        capture_song_rows_done_.store(saved_song_rows);
-        capture_sfx_rows_done_       = saved_sfx_rows;
-        // Restore sfx_voices_ to 1 if session was active
-        if(saved_session && saved_voices_cap > 0)
-            sfx_voices_ = 1;
-    }
     // Call after teardown() to prepare the player for a fresh init().
     // Does NOT close the SDL audio device — do that before calling reset().
-    void reset() {
+    // keep_cache=true preserves song_cache_, sfx_cache_, and capture progress.
+    // Use when restarting live playback without invalidating recorded cache.
+    void reset(bool keep_cache = false) {
         ym_music_.reset(); ym_sfx_.reset();
         song_ = IngameFMSong{};
         defined_songs_.clear();
-        song_cache_.clear();
-        sfx_cache_.clear();
+        if(!keep_cache) {
+            song_cache_.clear();
+            sfx_cache_.clear();
+        }
         for(auto& d : sfx_defs_present_) d = false;
         for(auto& p : patches_present_)  p = false;
         for(auto& v : sfx_voice_)         v = SfxVoiceState{};
@@ -482,10 +459,20 @@ public:
         build_cache_=false; play_cache_=false; use_cache_=false;
         // Note: music_lfo_enable_, music_lfo_freq_, sfx_lfo_enable_, sfx_lfo_freq_
         // are intentionally NOT reset here — only set_music_lfo()/set_sfx_lfo() change them.
-        capture_mode_=false; capture_pending_=false; capture_song_done_=false;
-        capture_session_active_=false; sfx_voices_captured_=0;
-        capture_song_rows_done_.store(0);
-        capture_sfx_rows_done_.clear();
+        if(!keep_cache) {
+            capture_mode_=false; capture_pending_=false; capture_song_done_=false;
+            capture_session_active_=false; sfx_voices_captured_=0;
+            capture_song_rows_done_.store(0);
+            capture_sfx_rows_done_.clear();
+        } else {
+            // Cancel any in-flight capture but keep the completed cache data
+            capture_mode_=false; capture_pending_=false;
+            capture_session_active_=false;
+            if(sfx_voices_captured_ > 0) {
+                sfx_voices_ = sfx_voices_captured_;
+                sfx_voices_captured_ = 0;
+            }
+        }
         chip_type_=IngameFMChipType::YM3438;
         // sample_rate_ intentionally kept — caller sets it again before re-init
     }

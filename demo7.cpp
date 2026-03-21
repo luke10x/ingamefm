@@ -553,7 +553,10 @@ struct SoundSystem
         if(running) teardown();
         lastError.clear();
         currentSongId = SONG_ID_1;
-        player.reset();
+        // Preserve cache if any songs are already recorded — user must
+        // explicitly clear it. keep_cache=true skips song_cache_/sfx_cache_ wipe.
+        bool hasCachedData = song1Cached || song2Cached;
+        player.reset(hasCachedData);
         player.set_sample_rate(sampleRate);
         player.set_chip_type(chipType);
         player.set_build_cache(false);
@@ -972,13 +975,18 @@ static void drawPanel(AppState& app)
                 ImGui::PopStyleColor(2);
             }
         } else {
+            // Current song is cached — offer to clear it so user can re-record
             ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.22f,0.22f,0.22f,1.f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f,0.35f,0.35f,1.f));
-            if(ImGui::Button("Re-record Current Song", ImVec2(-1,0))) {
+            if(ImGui::Button("Clear Cache for Current Song", ImVec2(-1,0))) {
                 if(s.currentSongId == SONG_ID_1) { s.song1Cached = false; s.song1RowsDone = 0; }
                 else                              { s.song2Cached = false; s.song2RowsDone = 0; }
-                if(!s.song1Cached || !s.song2Cached) s.cachedRate = 0;
-                s.startCapture();
+                // Cache rate is no longer valid since not all songs are cached
+                s.cachedRate = 0;
+                // Clear the audio data for this song from the player
+                SDL_LockAudioDevice(s.dev);
+                s.player.cancel_capture();
+                SDL_UnlockAudioDevice(s.dev);
             }
             ImGui::PopStyleColor(2);
         }
