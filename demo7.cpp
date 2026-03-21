@@ -678,6 +678,11 @@ struct AppState
     // Patch editors — one per song instrument
     OPNPatchEditor editors[7];    // [0]=PATCH_00 [1]=PATCH_01 [2]=PATCH_HIHAT  [3]=PATCH_KICK [4]=PATCH_SNARE [5]=PATCH_HIHAT2 [6]=PATCH_CLANG
     bool editorsInited = false;
+
+    // Piano state
+    int  pianoInstrument = 0;   // index into piano instrument list (not patch id)
+    int  pianoHeldNote   = -1;  // MIDI note currently held, -1 if none
+    bool pianoKeyHeld[12]= {};  // which of the 12 keys are pressed (by keyboard)
 };
 
 static AppState g_app;
@@ -692,7 +697,184 @@ static const IngameFMChipType CHIPS[]  = { IngameFMChipType::YM3438, IngameFMChi
 static const char* CHIP_LBLS[]         = { "YM3438 — Clean", "YM2612 — Authentic Sega" };
 
 // =============================================================================
-// 11. PANEL
+// 11. PIANO
+// =============================================================================
+
+// Maps key index 0-11 (chromatic from C) to SDL keycode
+// Z S X D C V G B H N J M
+static const SDL_Keycode PIANO_KEYS[12] = {
+    SDLK_z, SDLK_s, SDLK_x, SDLK_d, SDLK_c,
+    SDLK_v, SDLK_g, SDLK_b, SDLK_h, SDLK_n, SDLK_j, SDLK_m
+};
+
+// Which of the 12 semitones are black keys
+static const bool IS_BLACK[12] = {
+    false, true, false, true, false,
+    false, true, false, true, false, true, false
+};
+
+// For each white key index 0-6, which semitone it is
+static const int WHITE_TO_SEMI[7] = { 0, 2, 4, 5, 7, 9, 11 };
+
+// Piano instrument list — name + patch id
+struct PianoInstr { const char* name; int patchId; };
+static const PianoInstr PIANO_INSTRS[] = {
+    { "PATCH_00",   0x00 },
+    { "PATCH_01",   0x01 },
+    { "PATCH_HIHAT",0x02 },
+    { "PATCH_KICK", 0x20 },
+    { "PATCH_SNARE",0x21 },
+    { "PATCH_CLANG",0x23 },
+};
+static const int PIANO_INSTR_COUNT = 6;
+static const int PIANO_BASE_NOTE = 60; // C4
+
+static void drawPiano(AppState& app)
+{
+    SoundSystem& s = app.sound;
+    if(!s.running || !s.isLive) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    const float winW   = io.DisplaySize.x;
+    const float winH   = io.DisplaySize.y;
+
+    const float pianoH = 130.f;
+    const float pianoY = winH - pianoH - 10.f;
+    ImGui::SetNextWindowPos(ImVec2(0, pianoY), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(winW, pianoH + 10.f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.88f);
+    ImGui::Begin("##piano", nullptr,
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoScrollbar);
+
+    // Instrument selector
+    ImGui::Text("Piano:"); ImGui::SameLine();
+    ImGui::SetNextItemWidth(140.f);
+    if(ImGui::BeginCombo("##pinstr", PIANO_INSTRS[app.pianoInstrument].name)) {
+        for(int i = 0; i < PIANO_INSTR_COUNT; i++) {
+            bool sel = (i == app.pianoInstrument);
+            if(ImGui::Selectable(PIANO_INSTRS[i].name, sel))
+                app.pianoInstrument = i;
+            if(sel) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("  Z S X D C V G B H N J M");
+
+    // Draw the keyboard using ImDrawList
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 cp = ImGui::GetCursorScreenPos();
+
+    const float totalW   = winW - 20.f;
+    const int   NUM_WHITE = 7;
+    const float wkW      = totalW / NUM_WHITE;  // white key width
+    const float wkH      = 80.f;
+    const float bkW      = wkW * 0.6f;
+    const float bkH      = wkH * 0.58f;
+    const float kX       = cp.x;
+    const float kY       = cp.y;
+
+    // Black key x-offset within each white key pair
+    // Black keys sit between white keys: after C, D, F, G, A
+    // White key indices: C=0 D=1 E=2 F=3 G=4 A=5 B=6
+    // Black keys after white key index: 0(C#) 1(D#) 3(F#) 4(G#) 5(A#)
+    static const int BLACK_AFTER_WHITE[5] = { 0, 1, 3, 4, 5 };
+    static const int BLACK_SEMI[5]        = { 1, 3, 6, 8, 10 };
+
+    // Draw white keys first
+    for(int w = 0; w < NUM_WHITE; w++) {
+        int semi = WHITE_TO_SEMI[w];
+        bool held = app.pianoKeyHeld[semi];
+        float x0 = kX + w * wkW;
+        float y0 = kY;
+        ImU32 col = held ? IM_COL32(180,220,255,255) : IM_COL32(240,240,240,255);
+        ImU32 bdr = IM_COL32(80,80,80,255);
+        dl->AddRectFilled(ImVec2(x0+1,y0), ImVec2(x0+wkW-1,y0+wkH), col, 3.f);
+        dl->AddRect(ImVec2(x0,y0), ImVec2(x0+wkW,y0+wkH), bdr, 3.f);
+        // Key label at bottom
+        char lbl[4];
+        snprintf(lbl, sizeof(lbl), "%c", "ZCVBNM"[w == 6 ? 5 : (w == 5 ? 4 : (w == 4 ? 3 : (w == 3 ? 2 : (w == 2 ? 1 : (w == 1 ? 0 : 0)))))]);
+        // simpler: map white key index to keyboard char
+        static const char WK_CHAR[7] = {'Z','X','C','V','B','N','M'};
+        snprintf(lbl, sizeof(lbl), "%c", WK_CHAR[w]);
+        ImU32 lblCol = held ? IM_COL32(20,80,160,255) : IM_COL32(100,100,100,255);
+        dl->AddText(ImVec2(x0 + wkW*0.5f - 4.f, y0 + wkH - 16.f), lblCol, lbl);
+    }
+
+    // Draw black keys on top
+    static const char BK_CHAR[5] = {'S','D','G','H','J'};
+    for(int b = 0; b < 5; b++) {
+        int semi = BLACK_SEMI[b];
+        bool held = app.pianoKeyHeld[semi];
+        int wAfter = BLACK_AFTER_WHITE[b];
+        float x0 = kX + (wAfter + 1) * wkW - bkW * 0.5f;
+        float y0 = kY;
+        ImU32 col = held ? IM_COL32(60,130,220,255) : IM_COL32(30,30,30,255);
+        ImU32 bdr = IM_COL32(0,0,0,255);
+        dl->AddRectFilled(ImVec2(x0,y0), ImVec2(x0+bkW,y0+bkH), col, 2.f);
+        dl->AddRect(ImVec2(x0,y0), ImVec2(x0+bkW,y0+bkH), bdr, 2.f);
+        char lbl[4]; snprintf(lbl, sizeof(lbl), "%c", BK_CHAR[b]);
+        ImU32 lblCol = held ? IM_COL32(180,220,255,255) : IM_COL32(160,160,160,255);
+        dl->AddText(ImVec2(x0 + bkW*0.5f - 4.f, y0 + bkH - 16.f), lblCol, lbl);
+    }
+
+    // Mouse click on keys
+    ImVec2 mpos = ImGui::GetMousePos();
+    bool mdown = ImGui::IsMouseDown(0);
+    bool mclick = ImGui::IsMouseClicked(0);
+    bool mrel   = ImGui::IsMouseReleased(0);
+
+    if(mpos.y >= kY && mpos.y < kY + wkH) {
+        // Determine which key was clicked
+        // Check black keys first (they're on top)
+        int clickedNote = -1;
+        if(mpos.y < kY + bkH) {
+            for(int b = 0; b < 5; b++) {
+                int wAfter = BLACK_AFTER_WHITE[b];
+                float x0 = kX + (wAfter + 1) * wkW - bkW * 0.5f;
+                if(mpos.x >= x0 && mpos.x < x0 + bkW) {
+                    clickedNote = BLACK_SEMI[b];
+                    break;
+                }
+            }
+        }
+        if(clickedNote < 0) {
+            int w = (int)((mpos.x - kX) / wkW);
+            if(w >= 0 && w < NUM_WHITE) clickedNote = WHITE_TO_SEMI[w];
+        }
+
+        if(clickedNote >= 0) {
+            if(mclick) {
+                int midiNote = PIANO_BASE_NOTE + clickedNote;
+                if(app.pianoHeldNote != midiNote) {
+                    SDL_LockAudioDevice(s.dev);
+                    s.player.piano_note_on(midiNote,
+                        PIANO_INSTRS[app.pianoInstrument].patchId, 0);
+                    SDL_UnlockAudioDevice(s.dev);
+                    app.pianoHeldNote = midiNote;
+                }
+            }
+        }
+    }
+    if(mrel && app.pianoHeldNote >= 0) {
+        // Only release if no keyboard key is holding this note
+        int heldSemi = app.pianoHeldNote - PIANO_BASE_NOTE;
+        bool kbHeld = (heldSemi >= 0 && heldSemi < 12) ? app.pianoKeyHeld[heldSemi] : false;
+        if(!kbHeld) {
+            SDL_LockAudioDevice(s.dev);
+            s.player.piano_note_off();
+            SDL_UnlockAudioDevice(s.dev);
+            app.pianoHeldNote = -1;
+        }
+    }
+
+    ImGui::End();
+}
+
+// =============================================================================
+// 11b. PANEL
 // =============================================================================
 
 static void drawPanel(AppState& app)
@@ -843,7 +1025,12 @@ static void drawPanel(AppState& app)
         // Stop button
         ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.4f,0.08f,0.08f,1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f,0.12f,0.12f,1.f));
-        if(ImGui::Button("Stop Engine", ImVec2(-1,0))) s.teardown();
+        if(ImGui::Button("Stop Engine", ImVec2(-1,0))) {
+            s.teardown();
+            // Reset piano state
+            app.pianoHeldNote = -1;
+            for(int k=0;k<12;k++) app.pianoKeyHeld[k]=false;
+        }
         ImGui::PopStyleColor(2);
     }
 
@@ -1181,18 +1368,69 @@ static void mainTick()
 #endif
         }
         if(e.type==SDL_KEYDOWN && !e.key.repeat) {
-            switch(e.key.keysym.sym) {
-                case SDLK_ESCAPE:
-                    app.running=false;
+            SDL_Keycode sym = e.key.keysym.sym;
+            // SFX hotkeys
+            if(sym==SDLK_q) app.sound.sfx_play(SFX_ID_JUMP,    4, 10);
+            if(sym==SDLK_w) app.sound.sfx_play(SFX_ID_COIN,    3,  8);
+            if(sym==SDLK_e) app.sound.sfx_play(SFX_ID_ALARM,   5, 12);
+            if(sym==SDLK_r) app.sound.sfx_play(SFX_ID_FANFARE, 6, 20);
+            // Escape
+            if(sym==SDLK_ESCAPE) {
+                app.running=false;
 #ifdef __EMSCRIPTEN__
-                    emscripten_cancel_main_loop();
+                emscripten_cancel_main_loop();
 #endif
-                    break;
-                case SDLK_q: app.sound.sfx_play(SFX_ID_JUMP,    4, 10); break;
-                case SDLK_w: app.sound.sfx_play(SFX_ID_COIN,    3,  8); break;
-                case SDLK_e: app.sound.sfx_play(SFX_ID_ALARM,   5, 12); break;
-                case SDLK_r: app.sound.sfx_play(SFX_ID_FANFARE, 6, 20); break;
-                default: break;
+            }
+            // Piano keys — only when live
+            if(app.sound.running && app.sound.isLive) {
+                for(int k = 0; k < 12; k++) {
+                    if(sym == PIANO_KEYS[k]) {
+                        app.pianoKeyHeld[k] = true;
+                        int midiNote = PIANO_BASE_NOTE + k;
+                        SDL_LockAudioDevice(app.sound.dev);
+                        app.sound.player.piano_note_on(midiNote,
+                            PIANO_INSTRS[app.pianoInstrument].patchId, 0);
+                        SDL_UnlockAudioDevice(app.sound.dev);
+                        app.pianoHeldNote = midiNote;
+                        break;
+                    }
+                }
+            }
+        }
+        if(e.type==SDL_KEYUP) {
+            SDL_Keycode sym = e.key.keysym.sym;
+            if(app.sound.running && app.sound.isLive) {
+                for(int k = 0; k < 12; k++) {
+                    if(sym == PIANO_KEYS[k]) {
+                        app.pianoKeyHeld[k] = false;
+                        // Release only if this was the held note and no other key is down
+                        if(app.pianoHeldNote == PIANO_BASE_NOTE + k) {
+                            // Check if any other piano key is still held
+                            bool anyHeld = false;
+                            for(int j = 0; j < 12; j++) if(app.pianoKeyHeld[j]) { anyHeld=true; break; }
+                            if(!anyHeld) {
+                                SDL_LockAudioDevice(app.sound.dev);
+                                app.sound.player.piano_note_off();
+                                SDL_UnlockAudioDevice(app.sound.dev);
+                                app.pianoHeldNote = -1;
+                            } else {
+                                // Switch to the other held key
+                                for(int j = 0; j < 12; j++) {
+                                    if(app.pianoKeyHeld[j]) {
+                                        int midiNote = PIANO_BASE_NOTE + j;
+                                        SDL_LockAudioDevice(app.sound.dev);
+                                        app.sound.player.piano_note_on(midiNote,
+                                            PIANO_INSTRS[app.pianoInstrument].patchId, 0);
+                                        SDL_UnlockAudioDevice(app.sound.dev);
+                                        app.pianoHeldNote = midiNote;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
             }
         }
         if(e.type==SDL_WINDOWEVENT &&
@@ -1210,6 +1448,7 @@ static void mainTick()
 
     app.imgui.newFrame();
     drawPanel(app);
+    drawPiano(app);
     app.imgui.render();
 
     SDL_GL_SwapWindow(app.window);

@@ -298,7 +298,10 @@ public:
         SDL_LockAudioDevice(dev);
         finished_.store(true);
         if(ym_music_) for(int ch=0;ch<MAX_CHANNELS;ch++) ym_music_->key_off(ch);
-        if(ym_sfx_)   for(int v=0;v<sfx_voices_;v++)     ym_sfx_->key_off(v);
+        if(ym_sfx_) {
+            for(int v=0;v<sfx_voices_;v++) ym_sfx_->key_off(v);
+            ym_sfx_->key_off(sfx_voices_); // piano voice
+        }
         SDL_UnlockAudioDevice(dev);
     }
 
@@ -366,6 +369,26 @@ public:
             sfx_commit_keyon(best_v);
             vs.sample_in_row = KEY_OFF_GAP_SAMPLES;
         }
+    }
+
+    // ── Piano / direct note API (call with audio device locked) ──────────────
+    // Uses a dedicated voice just above the SFX range, so SFX never evicts it.
+    // sfx_set_voices(3) means SFX owns voices 0-2; piano uses voice 3.
+    void piano_note_on(int midi_note, int patch_id, int octave_offset = 0) {
+        if(!ym_sfx_) return;
+        if(!patches_present_[patch_id]) return;
+        int v = sfx_voices_;   // first voice beyond SFX range — SFX never touches it
+        const PatchEntry& pe = patches_[patch_id];
+        ym_sfx_->key_off(v);
+        ym_sfx_->load_patch(pe.patch, v);
+        double hz = IngameFMChip::midi_to_hz(midi_note);
+        ym_sfx_->set_frequency(v, hz, pe.block + octave_offset, sample_rate_);
+        ym_sfx_->key_on(v);
+    }
+
+    void piano_note_off() {
+        if(!ym_sfx_) return;
+        ym_sfx_->key_off(sfx_voices_);   // same dedicated voice
     }
 
     static void s_audio_callback(void* userdata, Uint8* stream, int len) {
