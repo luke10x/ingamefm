@@ -676,7 +676,7 @@ struct AppState
     bool showError    = false;
 
     // Patch editors — one per song instrument
-    OPNPatchEditor editors[3];    // [0]=PATCH_00 [1]=PATCH_01 [2]=PATCH_HIHAT
+    OPNPatchEditor editors[7];    // [0]=PATCH_00 [1]=PATCH_01 [2]=PATCH_HIHAT  [3]=PATCH_KICK [4]=PATCH_SNARE [5]=PATCH_HIHAT2 [6]=PATCH_CLANG
     bool editorsInited = false;
 };
 
@@ -1069,16 +1069,29 @@ static void drawPanel(AppState& app)
     bool canEdit = stopped || isLive;
     if(!canEdit) app.editorsInited = false;
     if(canEdit) {
-        ImGui::SeparatorText("Instruments");
+        // Patch name, patch ID, initial patch data
+        static const char* PATCH_NAMES[] = {
+            "PATCH_00", "PATCH_01", "PATCH_HIHAT",          // Song 1
+            "PATCH_KICK","PATCH_SNARE","PATCH_HIHAT","PATCH_CLANG" // Song 2
+        };
+        static const int PATCH_IDS[] = {
+            0x00, 0x01, 0x02,
+            0x20, 0x21, 0x22, 0x23
+        };
         if(!app.editorsInited) {
             app.editors[0].init("PATCH_00",   PATCH_00,   false,0,0);
             app.editors[1].init("PATCH_01",   PATCH_01,   false,0,0);
             app.editors[2].init("PATCH_HIHAT",PATCH_HIHAT,false,0,0);
+            app.editors[3].init("PATCH_KICK", PATCH_KICK, false,0,0);
+            app.editors[4].init("PATCH_SNARE",PATCH_SNARE,false,0,0);
+            app.editors[5].init("PATCH_HIHAT",PATCH_HIHAT,false,0,0);
+            app.editors[6].init("PATCH_CLANG",PATCH_CLANG,false,0,0);
             app.editorsInited=true;
         }
-        static const char* PATCH_NAMES[]={"PATCH_00","PATCH_01","PATCH_HIHAT"};
-        static const int   PATCH_IDS[]  ={0x00,0x01,0x02};
-        float edBtnW=(panelW-40.f)/3.f;
+        ImGui::SeparatorText("Instruments");
+        // Song 1 row — 3 buttons
+        ImGui::TextDisabled("Song 1:");
+        float edBtnW3 = (panelW-40.f)/3.f;
         for(int i=0;i<3;i++){
             if(i>0)ImGui::SameLine();
             OPNPatchEditor& ed=app.editors[i];
@@ -1086,8 +1099,22 @@ static void drawPanel(AppState& app)
             ImGui::PushStyleColor(ImGuiCol_Button,c);
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.4f,0.6f,0.8f,1.f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.5f,0.7f,0.9f,1.f));
-            char lbl[32];snprintf(lbl,sizeof(lbl),"Edit %s",PATCH_NAMES[i]);
-            if(ImGui::Button(lbl,ImVec2(edBtnW,0)))ed.open=!ed.open;
+            char lbl[32]; snprintf(lbl,sizeof(lbl),"%s##ed%d",PATCH_NAMES[i],i);
+            if(ImGui::Button(lbl,ImVec2(edBtnW3,0)))ed.open=!ed.open;
+            ImGui::PopStyleColor(3);
+        }
+        // Song 2 row — 4 buttons
+        ImGui::TextDisabled("Song 2:");
+        float edBtnW4 = (panelW-40.f)/4.f;
+        for(int i=3;i<7;i++){
+            if(i>3)ImGui::SameLine();
+            OPNPatchEditor& ed=app.editors[i];
+            ImVec4 c=ed.open?ImVec4(0.3f,0.5f,0.7f,1.f):ImVec4(0.18f,0.28f,0.38f,1.f);
+            ImGui::PushStyleColor(ImGuiCol_Button,c);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.4f,0.6f,0.8f,1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.5f,0.7f,0.9f,1.f));
+            char lbl[32]; snprintf(lbl,sizeof(lbl),"%s##ed%d",PATCH_NAMES[i],i);
+            if(ImGui::Button(lbl,ImVec2(edBtnW4,0)))ed.open=!ed.open;
             ImGui::PopStyleColor(3);
         }
         (void)PATCH_IDS; // used in popup section below
@@ -1099,9 +1126,15 @@ static void drawPanel(AppState& app)
     ImGui::End();
     // ── Patch editor popup windows (drawn outside main panel) ─────────────────
     if(canEdit) {
-        static const char* PATCH_NAMES[] = { "PATCH_00", "PATCH_01", "PATCH_HIHAT" };
-        static const int   PATCH_IDS[]   = { 0x00, 0x01, 0x02 };
-        for(int i=0;i<3;i++) {
+        static const char* PATCH_NAMES[] = {
+            "PATCH_00", "PATCH_01", "PATCH_HIHAT",
+            "PATCH_KICK","PATCH_SNARE","PATCH_HIHAT","PATCH_CLANG"
+        };
+        static const int PATCH_IDS[] = {
+            0x00, 0x01, 0x02,
+            0x20, 0x21, 0x22, 0x23
+        };
+        for(int i=0;i<7;i++) {
             OPNPatchEditor& ed = app.editors[i];
             char wndTitle[64]; snprintf(wndTitle, sizeof(wndTitle), "OPN Editor — %s###opned%d", PATCH_NAMES[i], i);
             if(ed.drawWindow(wndTitle, ImVec2(500, 640))) {
