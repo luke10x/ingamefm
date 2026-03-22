@@ -697,6 +697,7 @@ fm_voice_id fm_sfx_play(fm_module* m, fm_sfx_id id, int priority)
     // 3. If equal priority, steal oldest
     
     int best_voice = -1;
+    int best_slot = -1;  // active_sfx slot to clear
     int best_priority = priority + 1;  // Start higher than our priority
     int best_age = 0;
     
@@ -704,6 +705,7 @@ fm_voice_id fm_sfx_play(fm_module* m, fm_sfx_id id, int priority)
         if (!m->voices[i].active) {
             // Free voice - take it immediately
             best_voice = i;
+            best_slot = -1;
             break;
         }
         
@@ -713,23 +715,27 @@ fm_voice_id fm_sfx_play(fm_module* m, fm_sfx_id id, int priority)
             best_voice = i;
             best_priority = m->voices[i].priority;
             best_age = m->voices[i].age;
+            // Find the active_sfx slot for this voice
+            for (int slot = 0; slot < 6; slot++) {
+                if (m->active_sfx[slot].active && m->active_sfx[slot].voice_idx == i) {
+                    best_slot = slot;
+                    break;
+                }
+            }
         }
     }
     
     if (best_voice < 0) return FM_VOICE_INVALID;  // Should not happen
     
-    // Stop any existing SFX on this voice
-    if (m->voices[best_voice].active) {
-        m->chip->key_off(best_voice);
-        
-        // Clear any active SFX tracking for this voice
-        for (int i = 0; i < 6; i++) {
-            if (m->active_sfx[i].voice_idx == best_voice) {
-                m->active_sfx[i].active = false;
-                m->active_sfx[i].voice_idx = -1;
-            }
-        }
+    // Clear the old SFX slot if we're stealing
+    if (best_slot >= 0) {
+        m->active_sfx[best_slot].active = false;
+        m->active_sfx[best_slot].voice_idx = -1;
+        m->active_sfx[best_slot].sfx_id = -1;
     }
+    
+    // Key off the voice immediately
+    m->chip->key_off(best_voice);
     
     // Find a free active_sfx slot
     int slot = -1;
@@ -740,7 +746,7 @@ fm_voice_id fm_sfx_play(fm_module* m, fm_sfx_id id, int priority)
         }
     }
     
-    if (slot < 0) return FM_VOICE_INVALID;  // No free SFX slots
+    if (slot < 0) return FM_VOICE_INVALID;  // No free SFX slots (should not happen)
     
     // Initialize the SFX
     FmActiveSfx& sfx = m->active_sfx[slot];
@@ -762,6 +768,7 @@ fm_voice_id fm_sfx_play(fm_module* m, fm_sfx_id id, int priority)
     m->voices[best_voice].sfx_id = id;
     m->voices[best_voice].age = ++m->voice_age_counter;
     m->voices[best_voice].midi_note = -1;
+    m->voices[best_voice].patch_id = -1;
     m->channel_active[best_voice] = false;
     
     // Process first row immediately (sets up pending note)
@@ -780,6 +787,7 @@ static void update_sfx_voice(fm_module* m, int slot)
     FmActiveSfx& sfx = m->active_sfx[slot];
     if (!sfx.active) return;
     if (sfx.ticks_remaining <= 0) return;
+    if (sfx.voice_idx < 0 || sfx.voice_idx >= 6) return;
     
     FmSfxPattern& pat = m->sfx_patterns[sfx.sfx_id];
     int voice = sfx.voice_idx;
@@ -805,9 +813,11 @@ static void update_sfx_voice(fm_module* m, int slot)
             m->voices[voice].priority = 0;
             m->voices[voice].sfx_id = -1;
             m->voices[voice].midi_note = -1;
+            m->voices[voice].patch_id = -1;
             m->channel_active[voice] = false;
             sfx.active = false;
             sfx.voice_idx = -1;
+            sfx.sfx_id = -1;
             return;
         }
         
@@ -930,6 +940,28 @@ void fm_mix(fm_module* m, int16_t* stream, int frames)
     if (!m->chip) {
         std::memset(stream, 0, frames * 2 * sizeof(int16_t));
         return;
+    }
+
+    // Safety: Clean up any voices that are active but have no corresponding SFX
+    for (int i = 0; i < 6; i++) {
+        if (m->voices[i].active && m->voices[i].sfx_id >= 0) {
+            // Check if there's a matching active_sfx entry
+            bool found = false;
+            for (int slot = 0; slot < 6; slot++) {
+                if (m->active_sfx[slot].active && m->active_sfx[slot].voice_idx == i) {
+                    found = true;
+                    break;
+                }
+            }
+            // If no matching SFX, this voice is stuck - release it
+            if (!found) {
+                m->chip->key_off(i);
+                m->voices[i].active = false;
+                m->voices[i].priority = 0;
+                m->voices[i].sfx_id = -1;
+                m->channel_active[i] = false;
+            }
+        }
     }
 
     // Update active SFX for each sample in the buffer
