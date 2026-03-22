@@ -28,4 +28,4 @@ em++ -std=c++17 -O2 \
     --shell-file shell.html \
     -o new_demo/index.html
 
-(cd new_demo && python3 -mhttp.server)
+# (cd new_demo && python3 -mhttp.server)

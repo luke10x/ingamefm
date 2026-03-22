@@ -220,12 +220,6 @@ typedef enum {
     FM_SCHED_SFX
 } fm_sched_mode;
 
-typedef enum {
-    FM_SONG_SWITCH_IMMEDIATE = 0,
-    FM_SONG_SWITCH_STEP,
-    FM_SONG_SWITCH_LOOP
-} fm_song_switch;
-
 /* =============================================================================
  * MODULE LIFETIME
  * ============================================================================= */
@@ -327,53 +321,82 @@ void fm_patch_set_sfx(
  * SONG DECLARATION
  * ============================================================================= */
 
-fm_song_id fm_song_declare_source(
+/**
+ * Declare a song pattern.
+ * 
+ * Pattern format is multi-channel Furnace format:
+ *   First line: number of rows
+ *   Each row: channel1|channel2|...|channelN
+ *   Each channel: note(3) + instrument(2) + volume(2) [+ effects]
+ * 
+ * Example (2 channels):
+ *   "8\n"
+ *   "C-4007F....|E-4017F....\n"
+ *   "...........|...........\n"
+ *   ...
+ *
+ * @param m module
+ * @param id Song ID (1-15) to assign
+ * @param pattern_text Furnace pattern text
+ * @param tick_rate ticks per second (e.g. 60)
+ * @param speed ticks per row (e.g. 6 = 100ms/row at 60Hz)
+ * @return Song ID or -1 on error
+ */
+fm_song_id fm_song_declare(
     fm_module* m,
-    const char* pattern,
-    int ticks,
+    fm_song_id id,
+    const char* pattern_text,
+    int tick_rate,
     int speed
 );
-
-fm_song_id fm_song_declare_cache(
-    fm_module* m,
-    void* buffer,
-    int byte_capacity,
-    int original_ticks,
-    int original_speed,
-    int original_steps
-);
-
-/* =============================================================================
- * SONG CACHE LINKING
- * ============================================================================= */
-
-void fm_bind_cache_target(
-    fm_module* m,
-    fm_song_id synth_song_id,
-    fm_song_id cache_song_id
-);
-
-int  fm_song_cached_progress(fm_module* m, fm_song_id cache_song_id);
-bool fm_song_is_cached      (fm_module* m, fm_song_id cache_song_id);
 
 /* =============================================================================
  * SONG CONTROL
  * ============================================================================= */
 
-void fm_song_play(fm_module* m, fm_song_id id);
+/**
+ * Start playing a song.
+ *
+ * @param m module
+ * @param id Song ID from fm_song_declare
+ * @param loop true = loop indefinitely, false = play once
+ */
+void fm_song_play(fm_module* m, fm_song_id id, bool loop);
 
-void fm_song_schedule(
-    fm_module* m,
-    fm_song_id id,
-    fm_song_switch when
-);
+/**
+ * Song switch timing options.
+ */
+typedef enum {
+    FM_SONG_SWITCH_NOW = 0,     /* Switch immediately */
+    FM_SONG_SWITCH_STEP,         /* Switch at next row */
+    FM_SONG_SWITCH_LOOP          /* Switch at next loop point */
+} fm_song_switch_timing;
 
-void fm_song_schedule_silence(
-    fm_module* m,
-    fm_song_switch when
-);
+/**
+ * Schedule a song change.
+ *
+ * @param m module
+ * @param id Song ID to switch to
+ * @param timing When to switch (NOW, STEP, or LOOP)
+ */
+void fm_song_schedule(fm_module* m, fm_song_id id, fm_song_switch_timing timing);
 
+/**
+ * Get current song row.
+ *
+ * @param m module
+ * @return Current row index (0-based)
+ */
 int fm_song_get_row(fm_module* m);
+
+/**
+ * Get total rows in a song.
+ *
+ * @param m module
+ * @param id Song ID
+ * @return Total number of rows
+ */
+int fm_song_get_total_rows(fm_module* m, fm_song_id id);
 
 /* =============================================================================
  * SFX DECLARATION

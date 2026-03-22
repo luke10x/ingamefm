@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <algorithm>
 
 #include "new_api.h"
@@ -148,6 +149,105 @@ static constexpr int SFX_ID_JUMP    = 0;
 static constexpr int SFX_ID_COIN    = 1;
 static constexpr int SFX_ID_ALARM   = 2;
 static constexpr int SFX_ID_FANFARE = 3;
+
+// =============================================================================
+// SONGS (from demo7)
+// =============================================================================
+
+// Song 1: 5 channels, tick_rate=60, speed=6 -> 100ms/row, 64 rows = 6.4s loop
+// Instruments: 00=PATCH_00 (ch0), 01=PATCH_01 (ch2-4), 02=PATCH_HIHAT (ch1)
+static const char* SONG_1 =
+"64\n"
+"C-3007F....|C#30266....|C-3017F....|E-3017F....|G-3017F....\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"G-300......|C#302......|G-301......|B-301......|D-301......\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#302......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"A-300......|C#402......|A-301......|C-301......|E-301......\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"F-300......|C#302......|F-301......|A-301......|C-301......\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|C#402......|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+"...........|...........|...........|...........|...........\n"
+;
+
+// Song 2: 4 channels, tick_rate=60, speed=4 -> ~66ms/row, 16 rows = ~1.06s loop
+// Instruments: 20=KICK, 21=SNARE, 22=HIHAT, 23=CLANG
+static const char* SONG_2 =
+"16\n"
+"C-3207F....|...........|C-3227F....|...........\n"
+"...........|...........|...........|...........\n"
+"...........|C-3217F....|...........|C-3237F....\n"
+"...........|...........|...........|...........\n"
+"C-3207F....|...........|C-3227F....|...........\n"
+"...........|...........|...........|...........\n"
+"...........|C-3217F....|...........|...........\n"
+"...........|...........|C-3227F....|...........\n"
+"C-3207F....|...........|...........|C-3237F....\n"
+"...........|...........|C-3227F....|...........\n"
+"...........|C-3217F....|...........|...........\n"
+"...........|...........|...........|...........\n"
+"C-3207F....|...........|C-3227F....|...........\n"
+"...........|...........|...........|...........\n"
+"...........|C-3217F....|...........|C-3237F....\n"
+"...........|...........|C-3227F....|...........\n"
+;
+
+static constexpr int SONG_ID_1 = 1;
+static constexpr int SONG_ID_2 = 2;
 
 // Piano instrument list — name + patch id
 struct PianoInstr { const char* name; int patchId; };
@@ -405,6 +505,16 @@ struct AppState
     int             buffer_frames = 256;
     fm_chip_type    chip_type     = FM_CHIP_YM2612;
 
+    // Volume controls (0.0 - 1.0)
+    float           music_volume  = 1.0f;
+    float           sfx_volume    = 1.0f;
+
+    // Song state
+    int             current_song_id = 0;  // 0 = none, 1 = SONG_1, 2 = SONG_2
+    int             current_row     = 0;
+    int             total_rows      = 0;
+    bool            song_loop       = true;
+
     // Piano state
     int  pianoInstrument = 0;   // index into piano instrument list
     int  pianoHeldNote   = -1;  // MIDI note currently held (for mouse), -1 if none
@@ -487,11 +597,28 @@ static bool start_sound_system(AppState& app)
     fm_patch_set(app.sfx_module, 0x21, &PATCH_SNARE, sizeof(PATCH_SNARE), FM_CHIP_YM2612);
     fm_patch_set(app.sfx_module, 0x23, &PATCH_CLANG, sizeof(PATCH_CLANG), FM_CHIP_YM2612);
 
+    // Load patches into music module (for songs)
+    fm_patch_set(app.music_module, 0x00, &PATCH_00, sizeof(PATCH_00), FM_CHIP_YM2612);
+    fm_patch_set(app.music_module, 0x01, &PATCH_01, sizeof(PATCH_01), FM_CHIP_YM2612);
+    fm_patch_set(app.music_module, 0x02, &PATCH_HIHAT, sizeof(PATCH_HIHAT), FM_CHIP_YM2612);
+    fm_patch_set(app.music_module, 0x20, &PATCH_KICK, sizeof(PATCH_KICK), FM_CHIP_YM2612);
+    fm_patch_set(app.music_module, 0x21, &PATCH_SNARE, sizeof(PATCH_SNARE), FM_CHIP_YM2612);
+    fm_patch_set(app.music_module, 0x23, &PATCH_CLANG, sizeof(PATCH_CLANG), FM_CHIP_YM2612);
+
     // Declare SFX patterns
     fm_sfx_declare(app.sfx_module, SFX_ID_JUMP,    SFX_JUMP,    60, 3);
     fm_sfx_declare(app.sfx_module, SFX_ID_COIN,    SFX_COIN,    60, 3);
     fm_sfx_declare(app.sfx_module, SFX_ID_ALARM,   SFX_ALARM,   60, 3);
     fm_sfx_declare(app.sfx_module, SFX_ID_FANFARE, SFX_FANFARE, 60, 3);
+
+    // Declare songs in music module
+    fm_song_declare(app.music_module, SONG_ID_1, SONG_1, 60, 6);
+    fm_song_declare(app.music_module, SONG_ID_2, SONG_2, 60, 4);
+
+    // Start song 1 by default
+    fm_song_play(app.music_module, SONG_ID_1, true);
+    app.current_song_id = SONG_ID_1;
+    app.total_rows = fm_song_get_total_rows(app.music_module, SONG_ID_1);
 
     // Open SDL audio device
     SDL_AudioSpec desired{};
@@ -668,7 +795,68 @@ static void drawPanel(AppState& app)
     // SECTION 3 — SONGS
     // =========================================================================
     ImGui::SeparatorText("Songs");
-    ImGui::TextDisabled("Song system not yet implemented.");
+    
+    if (app.sound_running) {
+        // Current song indicator
+        if (app.current_song_id == SONG_ID_1) {
+            ImGui::Text("Playing: Song 1 (64 rows)");
+        } else if (app.current_song_id == SONG_ID_2) {
+            ImGui::Text("Playing: Song 2 (16 rows)");
+        } else {
+            ImGui::TextDisabled("No song playing");
+        }
+        
+        // Row progress
+        app.current_row = fm_song_get_row(app.music_module);
+        char row_label[32];
+        snprintf(row_label, sizeof(row_label), "%d/%d", app.current_row, app.total_rows);
+        ImGui::ProgressBar((float)app.current_row / app.total_rows, ImVec2(-1, 0), row_label);
+        
+        ImGui::Spacing();
+        
+        // Song selection buttons
+        float hw = (panelW - 40.f) / 2.f;
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.2f, 0.3f, 0.45f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.45f, 0.65f, 1.f));
+        
+        if (app.current_song_id != SONG_ID_1) {
+            if (ImGui::Button("Song 1 - Now", ImVec2(hw, 0))) {
+                fm_song_play(app.music_module, SONG_ID_1, true);
+                app.current_song_id = SONG_ID_1;
+                app.total_rows = fm_song_get_total_rows(app.music_module, SONG_ID_1);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Song 1 - Next Row", ImVec2(-1, 0))) {
+                fm_song_schedule(app.music_module, SONG_ID_1, FM_SONG_SWITCH_STEP);
+                app.current_song_id = SONG_ID_1;
+                app.total_rows = fm_song_get_total_rows(app.music_module, SONG_ID_1);
+            }
+        }
+        
+        if (app.current_song_id != SONG_ID_2) {
+            if (ImGui::Button("Song 2 - Now", ImVec2(hw, 0))) {
+                fm_song_play(app.music_module, SONG_ID_2, true);
+                app.current_song_id = SONG_ID_2;
+                app.total_rows = fm_song_get_total_rows(app.music_module, SONG_ID_2);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Song 2 - Next Row", ImVec2(-1, 0))) {
+                fm_song_schedule(app.music_module, SONG_ID_2, FM_SONG_SWITCH_STEP);
+                app.current_song_id = SONG_ID_2;
+                app.total_rows = fm_song_get_total_rows(app.music_module, SONG_ID_2);
+            }
+        }
+        
+        ImGui::PopStyleColor(2);
+        
+        // Loop toggle
+        ImGui::Spacing();
+        if (ImGui::Checkbox("Loop", &app.song_loop)) {
+            // Loop state is handled internally
+        }
+    } else {
+        ImGui::TextDisabled("Start sound system to play songs.");
+    }
 
     // =========================================================================
     // SECTION 4 — CACHE
@@ -680,7 +868,28 @@ static void drawPanel(AppState& app)
     // SECTION 5 — MIXER
     // =========================================================================
     ImGui::SeparatorText("Mixer");
-    ImGui::TextDisabled("Mixer controls pending...");
+    
+    if (app.sound_running) {
+        // Music volume
+        ImGui::Text("Music"); ImGui::SameLine();
+        int musicVolPct = (int)(app.music_volume * 100.f);
+        ImGui::SetNextItemWidth(150.f);
+        if (ImGui::SliderInt("##musicvol", &musicVolPct, 0, 100, "%d%%")) {
+            app.music_volume = musicVolPct / 100.f;
+            fm_module_set_volume(app.music_module, app.music_volume);
+        }
+        
+        // SFX volume
+        ImGui::Text("SFX"); ImGui::SameLine();
+        int sfxVolPct = (int)(app.sfx_volume * 100.f);
+        ImGui::SetNextItemWidth(150.f);
+        if (ImGui::SliderInt("##sfxvol", &sfxVolPct, 0, 100, "%d%%")) {
+            app.sfx_volume = sfxVolPct / 100.f;
+            fm_module_set_volume(app.sfx_module, app.sfx_volume);
+        }
+    } else {
+        ImGui::TextDisabled("Start sound system for mixer controls.");
+    }
 
     // =========================================================================
     // SECTION 6 — SOUND EFFECTS

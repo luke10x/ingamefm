@@ -124,8 +124,8 @@ struct FmVoice {
     int     sfx_id;         // SFX ID if playing SFX, -1 otherwise
 };
 
-// Gap samples before key-on (lets previous note's release envelope play)
-static constexpr int KEY_OFF_GAP_SAMPLES = 10;
+// Gap samples before key-on (minimum, per-channel gaps are dynamic)
+static constexpr int MIN_GAP_SAMPLES = 250;
 
 // SFX pattern event (one row)
 struct FmSfxEvent {
@@ -157,6 +157,53 @@ struct FmActiveSfx {
     bool    active;         // is currently playing
 };
 
+// Song channel event
+struct FmSongEvent {
+    int     note;           // MIDI note, -1 = none, -2 = off
+    int     patch_id;       // patch/instrument ID, -1 = inherit
+    int     volume;         // volume 0-127, -1 = inherit
+};
+
+// Song channel state
+struct FmSongChannel {
+    int             current_patch;
+    int             current_volume;
+    int             pending_note;
+    int             pending_patch;
+    int             pending_volume;
+    bool            pending_has_note;
+    bool            pending_is_off;
+    int             pending_gap;  // Gap samples before key-on
+};
+
+// Song pattern (multi-channel)
+struct FmSongPattern {
+    int             num_rows;
+    int             num_channels;
+    int             tick_rate;
+    int             speed;
+    int             samples_per_row;
+    FmSongEvent**   rows;     // array of num_rows, each is array of num_channels events
+};
+
+// Active song tracking
+struct FmActiveSong {
+    int             song_id;
+    int             current_row;
+    int             sample_in_row;
+    int             ticks_remaining;  // for loop tracking
+    bool            active;
+    bool            loop;
+    FmSongChannel   channels[6];
+};
+
+// Pending song change
+struct FmPendingSong {
+    int                 song_id;
+    fm_song_switch_timing timing;
+    bool                pending;
+};
+
 struct fm_module {
     // Configuration
     int             sample_rate;
@@ -183,6 +230,14 @@ struct fm_module {
 
     // Active SFX tracking (up to 6 concurrent SFX, one per voice)
     FmActiveSfx     active_sfx[6];
+
+    // Song patterns (up to 16 songs)
+    FmSongPattern   song_patterns[16];
+    bool            song_present[16];
+
+    // Active song
+    FmActiveSong    active_song;
+    FmPendingSong   pending_song;
 
     // Channel state tracking
     int             current_patch[6];
@@ -257,7 +312,7 @@ fm_module* fm_module_create(int sample_rate, int buffer_frames, fm_chip_type chi
         m->active_sfx[i].priority = 0;
         m->active_sfx[i].voice_idx = -1;
         m->active_sfx[i].current_row = 0;
-        m->active_sfx[i].sample_in_row = KEY_OFF_GAP_SAMPLES;
+        m->active_sfx[i].sample_in_row = MIN_GAP_SAMPLES;
         m->active_sfx[i].ticks_remaining = 0;
         m->active_sfx[i].last_patch_id = -1;
         m->active_sfx[i].pending_has_note = false;
@@ -265,6 +320,29 @@ fm_module* fm_module_create(int sample_rate, int buffer_frames, fm_chip_type chi
         m->active_sfx[i].pending_patch_id = -1;
         m->active_sfx[i].active = false;
     }
+
+    // Initialize song patterns
+    std::memset(m->song_patterns, 0, sizeof(m->song_patterns));
+    std::memset(m->song_present, 0, sizeof(m->song_present));
+
+    // Initialize active song
+    m->active_song.song_id = 0;
+    m->active_song.current_row = 0;
+    m->active_song.sample_in_row = 0;
+    m->active_song.ticks_remaining = 0;
+    m->active_song.active = false;
+    m->active_song.loop = false;
+    for (int ch = 0; ch < 6; ch++) {
+        m->active_song.channels[ch].current_patch = -1;
+        m->active_song.channels[ch].current_volume = 127;
+        m->active_song.channels[ch].pending_has_note = false;
+        m->active_song.channels[ch].pending_is_off = false;
+    }
+
+    // Initialize pending song
+    m->pending_song.song_id = 0;
+    m->pending_song.timing = FM_SONG_SWITCH_NOW;
+    m->pending_song.pending = false;
 
     return m;
 }
@@ -358,125 +436,6 @@ void fm_patch_set_sfx(fm_module* m, fm_sfx_id sfx, fm_patch_id patch_id)
     (void)m;
     (void)sfx;
     (void)patch_id;
-}
-
-// =============================================================================
-// SONG DECLARATION (stub - future implementation)
-// =============================================================================
-
-fm_song_id fm_song_declare_source(fm_module* m, const char* pattern, int ticks, int speed)
-{
-    // Future: parse Furnace pattern and store
-    (void)m;
-    (void)pattern;
-    (void)ticks;
-    (void)speed;
-    return 0;
-}
-
-fm_song_id fm_song_declare_cache(fm_module* m, void* buffer, int byte_capacity,
-                                  int original_ticks, int original_speed, int original_steps)
-{
-    // Future: associate cache buffer with song
-    (void)m;
-    (void)buffer;
-    (void)byte_capacity;
-    (void)original_ticks;
-    (void)original_speed;
-    (void)original_steps;
-    return 0;
-}
-
-void fm_bind_cache_target(fm_module* m, fm_song_id synth_song_id, fm_song_id cache_song_id)
-{
-    (void)m;
-    (void)synth_song_id;
-    (void)cache_song_id;
-}
-
-int fm_song_cached_progress(fm_module* m, fm_song_id cache_song_id)
-{
-    (void)m;
-    (void)cache_song_id;
-    return 0;
-}
-
-bool fm_song_is_cached(fm_module* m, fm_song_id cache_song_id)
-{
-    (void)m;
-    (void)cache_song_id;
-    return false;
-}
-
-void fm_song_play(fm_module* m, fm_song_id id)
-{
-    (void)m;
-    (void)id;
-}
-
-void fm_song_schedule(fm_module* m, fm_song_id id, fm_song_switch when)
-{
-    (void)m;
-    (void)id;
-    (void)when;
-}
-
-void fm_song_schedule_silence(fm_module* m, fm_song_switch when)
-{
-    (void)m;
-    (void)when;
-}
-
-int fm_song_get_row(fm_module* m)
-{
-    (void)m;
-    return 0;
-}
-
-// =============================================================================
-// SFX DECLARATION (stub - future implementation)
-// =============================================================================
-
-fm_sfx_id fm_sfx_declare_source(fm_module* m, const char* pattern, int ticks, int speed)
-{
-    (void)m;
-    (void)pattern;
-    (void)ticks;
-    (void)speed;
-    return 0;
-}
-
-fm_sfx_id fm_sfx_declare_cache(fm_module* m, void* buffer, int byte_capacity,
-                                int original_ticks, int original_speed, int original_steps)
-{
-    (void)m;
-    (void)buffer;
-    (void)byte_capacity;
-    (void)original_ticks;
-    (void)original_speed;
-    (void)original_steps;
-    return 0;
-}
-
-void fm_attach_sfx_cache(fm_module* m, fm_sfx_id synth_sfx_id, fm_sfx_id cache_sfx_id)
-{
-    (void)m;
-    (void)synth_sfx_id;
-    (void)cache_sfx_id;
-}
-
-int fm_sfx_cached_progress(fm_module* m, fm_sfx_id cache_sfx_id)
-{
-    (void)m;
-    (void)cache_sfx_id;
-    return 0;
-}
-
-bool fm_sfx_is_cached(fm_module* m, fm_sfx_id cache_sfx_id)
-{
-    (void)m;
-    (void)cache_sfx_id;
-    return false;
 }
 
 // =============================================================================
@@ -761,7 +720,7 @@ fm_voice_id fm_sfx_play(fm_module* m, fm_sfx_id id, int priority)
     sfx.priority = priority;
     sfx.voice_idx = best_voice;
     sfx.current_row = 0;
-    sfx.sample_in_row = KEY_OFF_GAP_SAMPLES;  // Start after gap
+    sfx.sample_in_row = MIN_GAP_SAMPLES;  // Start after gap
     sfx.ticks_remaining = pat.num_rows;
     sfx.last_patch_id = -1;
     sfx.pending_has_note = false;
@@ -803,7 +762,7 @@ static void update_sfx_voice(fm_module* m, int slot)
     sfx.sample_in_row++;
     
     // Check if we've crossed the gap boundary - commit key-on
-    if (sfx.sample_in_row == KEY_OFF_GAP_SAMPLES && sfx.pending_has_note) {
+    if (sfx.sample_in_row == MIN_GAP_SAMPLES && sfx.pending_has_note) {
         sfx_commit_keyon(m, voice);
     }
     
@@ -841,6 +800,386 @@ static void update_sfx(fm_module* m, int num_samples)
     for (int i = 0; i < num_samples; i++) {
         for (int slot = 0; slot < 6; slot++) {
             update_sfx_voice(m, slot);
+        }
+    }
+}
+
+// =============================================================================
+// SONG PATTERN PARSER (multi-channel)
+// =============================================================================
+
+fm_song_id fm_song_declare(fm_module* m, fm_song_id id, const char* pattern_text,
+                           int tick_rate, int speed)
+{
+    if (!m || !pattern_text || tick_rate <= 0 || speed <= 0) return -1;
+    if (id < 1 || id > 15) return -1;  // Reserve IDs 1-15 for songs
+    
+    // Parse the pattern text (Furnace multi-channel format)
+    const char* p = pattern_text;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    
+    // First line: number of rows
+    int num_rows = 0;
+    while (*p >= '0' && *p <= '9') {
+        num_rows = num_rows * 10 + (*p - '0');
+        p++;
+    }
+    
+    if (num_rows <= 0 || num_rows > 256) return -1;
+    
+    // Skip to first row data
+    while (*p && *p != '\n') p++;
+    if (*p == '\n') p++;
+    
+    // Parse first row to determine number of channels
+    const char* row_start = p;
+    int num_channels = 1;
+    while (*p && *p != '\n') {
+        if (*p == '|') num_channels++;
+        p++;
+    }
+    
+    // Limit to 6 channels (OPN max)
+    if (num_channels > 6) num_channels = 6;
+    
+    // Reset position to start of first row
+    p = row_start;
+    
+    // Allocate and parse song
+    FmSongPattern& song = m->song_patterns[id];
+    song.num_rows = num_rows;
+    song.num_channels = num_channels;
+    song.tick_rate = tick_rate;
+    song.speed = speed;
+    song.samples_per_row = (int)((double)m->sample_rate / tick_rate * speed);
+
+    // Free existing rows if any
+    if (song.rows) {
+        for (int r = 0; r < song.num_rows; r++) {
+            if (song.rows[r]) delete[] song.rows[r];
+        }
+        delete[] song.rows;
+    }
+
+    song.rows = new FmSongEvent*[num_rows];
+    for (int r = 0; r < num_rows; r++) {
+        song.rows[r] = new FmSongEvent[num_channels];
+    }
+
+    // Parse each row - p is already at start of first data row
+    int last_note[6] = {-1, -1, -1, -1, -1, -1};
+    int last_inst[6] = {-1, -1, -1, -1, -1, -1};
+    int last_vol[6] = {127, 127, 127, 127, 127, 127};
+    
+    for (int row = 0; row < num_rows; row++) {
+        if (!*p || *p == '\0') break;
+        
+        for (int ch = 0; ch < num_channels; ch++) {
+            FmSongEvent& ev = song.rows[row][ch];
+            ev.note = -1;       // -1 = no note (keep playing)
+            ev.patch_id = -1;   // -1 = inherit instrument
+            ev.volume = -1;     // -1 = inherit volume
+            
+            if (!*p || *p == '\n') break;
+            
+            // Parse channel: note(3) + inst(2) + vol(2) + dots(4) = 11 chars typical
+            char note_str[4] = {0};
+            char inst_str[3] = {0};
+            char vol_str[3] = {0};
+            
+            // Copy note (3 chars)
+            for (int i = 0; i < 3 && *p && *p != '|' && *p != '\n'; i++) {
+                note_str[i] = *p++;
+            }
+            // Copy instrument (2 chars)
+            for (int i = 0; i < 2 && *p && *p != '|' && *p != '\n'; i++) {
+                inst_str[i] = *p++;
+            }
+            // Copy volume (2 chars)
+            for (int i = 0; i < 2 && *p && *p != '|' && *p != '\n'; i++) {
+                vol_str[i] = *p++;
+            }
+            // Skip rest of channel
+            while (*p && *p != '|' && *p != '\n') p++;
+            
+            // Parse note - only if not "..."
+            if (note_str[0] && note_str[0] != '.') {
+                ev.note = parse_note_field(note_str);
+                if (ev.note >= 0) last_note[ch] = ev.note;
+                else if (ev.note == -2) last_note[ch] = -2;  // OFF
+            }
+            // If note_str is "...", ev.note stays -1 (no new note)
+            
+            // Parse instrument - only if not ".."
+            if (inst_str[0] && inst_str[0] != '.') {
+                ev.patch_id = parse_hex2(inst_str);
+                if (ev.patch_id >= 0) last_inst[ch] = ev.patch_id;
+            }
+            // If inst_str is "..", ev.patch_id stays -1 (inherit)
+            
+            // Parse volume - only if not ".."
+            if (vol_str[0] && vol_str[0] != '.') {
+                ev.volume = parse_hex2(vol_str);
+                if (ev.volume >= 0) last_vol[ch] = ev.volume;
+            }
+            // If vol_str is "..", ev.volume stays -1 (inherit)
+            
+            // Skip '|' separator
+            if (*p == '|') p++;
+        }
+        
+        // Skip to next line
+        while (*p && *p != '\n') p++;
+        if (*p == '\n') p++;
+    }
+    
+    m->song_present[id] = true;
+    return id;
+}
+
+// Find the next row with a note on a given channel
+static int find_next_note_row(FmSongPattern& pat, int start_row, int ch)
+{
+    for (int row = start_row + 1; row < pat.num_rows; row++) {
+        if (pat.rows[row][ch].note >= 0) {
+            return row;
+        }
+    }
+    return -1;  // No more notes
+}
+
+// Process a row for the active song - called at END of previous row
+static void song_process_row(fm_module* m, int row_idx)
+{
+    FmActiveSong& song = m->active_song;
+    if (song.song_id <= 0 || song.song_id > 15) return;
+    if (!m->song_present[song.song_id]) return;
+
+    FmSongPattern& pat = m->song_patterns[song.song_id];
+    if (row_idx >= pat.num_rows) return;
+
+    // Process each channel
+    for (int ch = 0; ch < pat.num_channels && ch < 6; ch++) {
+        FmSongEvent& ev = pat.rows[row_idx][ch];
+        FmSongChannel& ch_state = song.channels[ch];
+
+        // Update instrument and volume if specified
+        if (ev.patch_id >= 0) ch_state.current_patch = ev.patch_id;
+        if (ev.volume >= 0) ch_state.current_volume = ev.volume;
+
+        if (ev.note == -2) {
+            // OFF note - key off immediately and reset channel
+            m->chip->key_off(ch);
+            m->channel_active[ch] = false;
+            ch_state.pending_has_note = false;
+            ch_state.pending_is_off = true;
+            ch_state.pending_gap = MIN_GAP_SAMPLES;
+        } else if (ev.note >= 0) {
+            // New note - key off immediately to stop previous note
+            m->chip->key_off(ch);
+            m->channel_active[ch] = false;
+            
+            // Fully reset channel state before new note
+            ch_state.pending_has_note = false;
+            ch_state.pending_is_off = false;
+            
+            // Look ahead to find next note on this channel
+            int next_note_row = find_next_note_row(pat, row_idx, ch);
+            if (next_note_row >= 0) {
+                // Calculate dynamic gap based on distance to next note
+                // More distance = longer gap for release
+                int rows_until_next = next_note_row - row_idx;
+                // Use 44 + (rows * 10) samples, capped at 250
+                ch_state.pending_gap = std::min(250, MIN_GAP_SAMPLES + (rows_until_next * 10));
+            } else {
+                // No next note - use default gap
+                ch_state.pending_gap = MIN_GAP_SAMPLES;
+            }
+            
+            // Mark for key-on after gap
+            ch_state.pending_has_note = true;
+            ch_state.pending_note = ev.note;
+            ch_state.pending_patch = ch_state.current_patch;
+            ch_state.pending_volume = ch_state.current_volume;
+        }
+        // If ev.note == -1, keep previous state (no change)
+    }
+}
+
+// Commit pending notes for active song (after gap samples)
+static void song_commit_keyon(fm_module* m, int current_gap)
+{
+    FmActiveSong& song = m->active_song;
+    if (song.song_id <= 0 || song.song_id > 15) return;
+
+    for (int ch = 0; ch < 6; ch++) {
+        FmSongChannel& ch_state = song.channels[ch];
+        if (!ch_state.pending_has_note) continue;
+        if (ch_state.pending_patch < 0) continue;
+        if (!m->patch_present[ch_state.pending_patch]) continue;
+        
+        // Check if this channel's gap has elapsed
+        if (current_gap < ch_state.pending_gap) continue;
+
+        // Load patch and apply volume
+        fm_patch_opn patch = m->patches[ch_state.pending_patch];
+        
+        // Apply volume to carrier operators based on algorithm
+        int tl_add = ((0x7F - ch_state.current_volume) * 127) / 0x7F;
+        bool isCarrier[4] = {false, false, false, false};
+        switch(patch.ALG) {
+            case 0: case 1: case 2: case 3: isCarrier[3] = true; break;
+            case 4: isCarrier[1] = isCarrier[3] = true; break;
+            case 5: case 6: isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
+            case 7: isCarrier[0] = isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
+        }
+        for(int op = 0; op < 4; op++) {
+            if(isCarrier[op]) {
+                patch.op[op].TL = std::min(127, (int)patch.op[op].TL + tl_add);
+            }
+        }
+        
+        // Key off first to ensure clean retrigger
+        m->chip->key_off(ch);
+        m->channel_active[ch] = false;
+        
+        m->chip->load_patch(patch, ch);
+        m->current_patch[ch] = ch_state.pending_patch;
+
+        // Set frequency and key on
+        double hz = 440.0 * std::pow(2.0, (ch_state.pending_note - 69) / 12.0);
+        m->chip->set_frequency(ch, hz, 0);
+        m->chip->key_on(ch);
+        m->channel_active[ch] = true;
+
+        // Clear pending state completely
+        ch_state.pending_has_note = false;
+        ch_state.pending_is_off = false;
+        ch_state.pending_gap = MIN_GAP_SAMPLES;
+    }
+}
+
+// Start a song
+void fm_song_play(fm_module* m, fm_song_id id, bool loop)
+{
+    if (!m || !m->chip) return;
+    if (id <= 0 || id > 15) return;
+    if (!m->song_present[id]) return;
+
+    FmSongPattern& pat = m->song_patterns[id];
+
+    // Stop current song and reset all channels
+    for (int ch = 0; ch < 6; ch++) {
+        m->chip->key_off(ch);
+        m->channel_active[ch] = false;
+        m->current_patch[ch] = -1;
+    }
+
+    // Initialize active song - start at sample 0
+    m->active_song.song_id = id;
+    m->active_song.current_row = 0;
+    m->active_song.sample_in_row = 0;
+    m->active_song.ticks_remaining = pat.num_rows;
+    m->active_song.active = true;
+    m->active_song.loop = loop;
+
+    // Initialize channels completely
+    for (int ch = 0; ch < 6; ch++) {
+        m->active_song.channels[ch].current_patch = -1;
+        m->active_song.channels[ch].current_volume = 127;
+        m->active_song.channels[ch].pending_has_note = false;
+        m->active_song.channels[ch].pending_is_off = false;
+        m->active_song.channels[ch].pending_gap = MIN_GAP_SAMPLES;
+    }
+
+    // Process first row (sets up pending notes - will be triggered in update_song)
+    song_process_row(m, 0);
+}
+
+// Schedule song change
+void fm_song_schedule(fm_module* m, fm_song_id id, fm_song_switch_timing timing)
+{
+    if (!m || id <= 0 || id > 15) return;
+    if (!m->song_present[id]) return;
+    
+    m->pending_song.song_id = id;
+    m->pending_song.timing = timing;
+    m->pending_song.pending = true;
+}
+
+// Get current row
+int fm_song_get_row(fm_module* m)
+{
+    if (!m || !m->active_song.active) return 0;
+    return m->active_song.current_row;
+}
+
+// Get total rows
+int fm_song_get_total_rows(fm_module* m, fm_song_id id)
+{
+    if (!m || id <= 0 || id > 15) return 0;
+    if (!m->song_present[id]) return 0;
+    return m->song_patterns[id].num_rows;
+}
+
+// Update active song by a given number of samples
+static void update_song(fm_module* m, int num_samples)
+{
+    FmActiveSong& song = m->active_song;
+    if (!song.active) return;
+    if (song.song_id <= 0 || song.song_id > 15) return;
+    if (!m->song_present[song.song_id]) return;
+
+    FmSongPattern& pat = m->song_patterns[song.song_id];
+
+    for (int i = 0; i < num_samples; i++) {
+        // Check for pending song change with NOW timing
+        if (m->pending_song.pending && m->pending_song.timing == FM_SONG_SWITCH_NOW) {
+            fm_song_play(m, m->pending_song.song_id, song.loop);
+            m->pending_song.pending = false;
+            continue;
+        }
+
+        song.sample_in_row++;
+
+        // At END of gap, commit key-on for pending notes
+        // Pass current gap (sample_in_row) to check per-channel gaps
+        song_commit_keyon(m, song.sample_in_row);
+
+        // End of row
+        if (song.sample_in_row >= pat.samples_per_row) {
+            song.sample_in_row = 0;
+            song.current_row++;
+
+            // Check for pending song change with STEP timing
+            if (m->pending_song.pending && m->pending_song.timing == FM_SONG_SWITCH_STEP) {
+                fm_song_play(m, m->pending_song.song_id, song.loop);
+                m->pending_song.pending = false;
+                continue;
+            }
+
+            // End of song
+            if (song.current_row >= pat.num_rows) {
+                if (song.loop) {
+                    song.current_row = 0;
+                    song.ticks_remaining = pat.num_rows;
+                } else {
+                    // Stop song
+                    for (int ch = 0; ch < 6; ch++) {
+                        m->chip->key_off(ch);
+                        m->channel_active[ch] = false;
+                    }
+                    song.active = false;
+                    song.song_id = 0;
+                    m->pending_song.pending = false;
+                    return;
+                }
+            }
+
+            // Process next row (sets up pending notes)
+            if (song.current_row < pat.num_rows) {
+                song_process_row(m, song.current_row);
+            }
         }
     }
 }
@@ -971,7 +1310,8 @@ void fm_mix(fm_module* m, int16_t* stream, int frames)
         }
     }
 
-    // Update active SFX for each sample in the buffer
+    // Update active song and SFX for each sample in the buffer
+    update_song(m, frames);
     update_sfx(m, frames);
 
     // SYNTH mode: generate from chip
