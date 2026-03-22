@@ -17,6 +17,91 @@
 
 #include <cstdio>
 #include <cmath>
+#include <cstring>
+#include <algorithm>
+
+#include "new_api.h"
+
+// =============================================================================
+// INSTRUMENT PATCHES (from demo7)
+// =============================================================================
+
+static constexpr fm_patch_opn PATCH_00 =
+{
+    .ALG = 2, .FB = 5, .LFO = 0,
+    .op = {
+        { .DT = 1,  .MUL = 3, .TL = 38, .RS = 0, .AR = 12, .AM = 0, .DR = 7,  .SR = 11, .SL = 4, .RR = 6,  .SSG = 0 },
+        { .DT = -1, .MUL = 1, .TL = 38, .RS = 0, .AR = 17, .AM = 0, .DR = 5,  .SR = 2,  .SL = 2, .RR = 1,  .SSG = 0 },
+        { .DT = 1,  .MUL = 2, .TL = 5,  .RS = 0, .AR = 11, .AM = 0, .DR = 13, .SR = 11, .SL = 5, .RR = 13, .SSG = 0 },
+        { .DT = -1, .MUL = 1, .TL = 0,  .RS = 0, .AR = 31, .AM = 0, .DR = 9,  .SR = 15, .SL = 5, .RR = 8,  .SSG = 3 }
+    }
+};
+
+static constexpr fm_patch_opn PATCH_01 =
+{
+    .ALG = 4, .FB = 6, .LFO = 0,
+    .op = {
+        { .DT = 0, .MUL = 3, .TL = 35, .RS = 0, .AR = 13, .AM = 0, .DR = 1,  .SR = 25, .SL = 2, .RR = 0, .SSG = 0 },
+        { .DT = 0, .MUL = 1, .TL = 20, .RS = 0, .AR = 17, .AM = 0, .DR = 10, .SR = 8,  .SL = 2, .RR = 7, .SSG = 0 },
+        { .DT = 0, .MUL = 1, .TL = 11, .RS = 0, .AR = 8,  .AM = 0, .DR = 4,  .SR = 23, .SL = 7, .RR = 1, .SSG = 0 },
+        { .DT = 0, .MUL = 1, .TL = 14, .RS = 0, .AR = 25, .AM = 0, .DR = 0,  .SR = 10, .SL = 0, .RR = 9, .SSG = 0 }
+    }
+};
+
+static constexpr fm_patch_opn PATCH_HIHAT =
+{
+    .ALG = 7, .FB = 7, .LFO = 0,
+    .op = {
+        { .DT = 3, .MUL = 13, .TL =  8, .RS = 3, .AR = 31, .AM = 0, .DR = 31, .SR = 0, .SL = 15, .RR = 15, .SSG = 0 },
+        { .DT = 2, .MUL = 11, .TL = 12, .RS = 3, .AR = 31, .AM = 0, .DR = 31, .SR = 0, .SL = 15, .RR = 15, .SSG = 0 },
+        { .DT = 1, .MUL =  7, .TL = 16, .RS = 3, .AR = 31, .AM = 0, .DR = 30, .SR = 0, .SL = 15, .RR = 14, .SSG = 0 },
+        { .DT = 0, .MUL = 15, .TL = 20, .RS = 3, .AR = 31, .AM = 0, .DR = 29, .SR = 0, .SL = 15, .RR = 13, .SSG = 0 }
+    }
+};
+
+static constexpr fm_patch_opn PATCH_KICK =
+{
+    .ALG = 0, .FB = 7, .LFO = 0,
+    .op = {
+        { .DT = 0, .MUL = 1, .TL =  0, .RS = 3, .AR = 31, .AM = 0, .DR = 31, .SR = 0, .SL = 15, .RR = 15, .SSG = 0 },
+        { .DT = 0, .MUL = 1, .TL = 16, .RS = 2, .AR = 31, .AM = 0, .DR = 20, .SR = 0, .SL = 15, .RR = 10, .SSG = 0 },
+        { .DT = 0, .MUL = 1, .TL = 20, .RS = 1, .AR = 31, .AM = 0, .DR = 18, .SR = 0, .SL = 15, .RR =  8, .SSG = 0 },
+        { .DT = 0, .MUL = 1, .TL =  0, .RS = 0, .AR = 31, .AM = 0, .DR = 14, .SR = 0, .SL = 15, .RR =  8, .SSG = 0 }
+    }
+};
+
+static constexpr fm_patch_opn PATCH_SNARE =
+{
+    .ALG = 4, .FB = 7, .LFO = 0,
+    .op = {
+        { .DT = 3, .MUL = 15, .TL =  0, .RS = 3, .AR = 31, .AM = 0, .DR = 31, .SR = 0, .SL = 15, .RR = 15, .SSG = 0 },
+        { .DT = 0, .MUL =  3, .TL =  0, .RS = 2, .AR = 31, .AM = 0, .DR = 28, .SR = 0, .SL = 15, .RR = 14, .SSG = 0 },
+        { .DT = 2, .MUL =  7, .TL = 10, .RS = 1, .AR = 31, .AM = 0, .DR = 24, .SR = 0, .SL = 15, .RR = 12, .SSG = 0 },
+        { .DT = 0, .MUL =  1, .TL =  2, .RS = 0, .AR = 31, .AM = 0, .DR = 22, .SR = 0, .SL = 15, .RR = 10, .SSG = 0 }
+    }
+};
+
+static constexpr fm_patch_opn PATCH_CLANG =
+{
+    .ALG = 3, .FB = 6, .LFO = 0,
+    .op = {
+        { .DT = 3, .MUL = 11, .TL =  0, .RS = 3, .AR = 31, .AM = 0, .DR = 25, .SR = 0, .SL = 15, .RR = 12, .SSG = 0 },
+        { .DT = -2, .MUL = 7, .TL =  8, .RS = 2, .AR = 31, .AM = 0, .DR = 22, .SR = 0, .SL = 15, .RR = 10, .SSG = 0 },
+        { .DT = 2, .MUL = 13, .TL = 12, .RS = 2, .AR = 31, .AM = 0, .DR = 20, .SR = 0, .SL = 15, .RR =  9, .SSG = 0 },
+        { .DT = 0, .MUL =  1, .TL =  0, .RS = 0, .AR = 31, .AM = 0, .DR = 18, .SR = 0, .SL = 15, .RR =  8, .SSG = 0 }
+    }
+};
+
+// Piano instrument list — name + patch id
+struct PianoInstr { const char* name; int patchId; };
+static const PianoInstr PIANO_INSTRS[] = {
+    { "PATCH_00",   0x00 },
+    { "PATCH_01",   0x01 },
+    { "PATCH_HIHAT",0x02 },
+    { "PATCH_KICK", 0x20 },
+    { "PATCH_SNARE",0x21 },
+    { "PATCH_CLANG",0x23 },
+};
 
 // =============================================================================
 // GLSL
@@ -237,16 +322,8 @@ static const bool IS_BLACK[12] = {
 // For each white key index 0-6, which semitone it is
 static const int WHITE_TO_SEMI[7] = { 0, 2, 4, 5, 7, 9, 11 };
 
-// Piano instrument list — name + patch id
-struct PianoInstr { const char* name; int patchId; };
-static const PianoInstr PIANO_INSTRS[] = {
-    { "PATCH_00",   0x00 },
-    { "PATCH_01",   0x01 },
-    { "PATCH_HIHAT",0x02 },
-    { "PATCH_KICK", 0x20 },
-    { "PATCH_SNARE",0x21 },
-    { "PATCH_CLANG",0x23 },
-};
+// PIANO_INSTRS is defined above with patches
+
 static const int PIANO_INSTR_COUNT = 6;
 static const int PIANO_BASE_NOTE = 60; // C4
 
@@ -259,6 +336,17 @@ struct AppState
 
     AuroraRenderer aurora;
     ModImgui       imgui;
+
+    // Sound system state
+    fm_module*      music_module = nullptr;  // for music/songs
+    fm_module*      sfx_module   = nullptr;  // for SFX/piano
+    SDL_AudioDeviceID audio_dev  = 0;
+    bool            sound_running = false;
+
+    // Sound settings (configured before start)
+    int             sample_rate   = 44100;
+    int             buffer_frames = 256;
+    fm_chip_type    chip_type     = FM_CHIP_OPN;
 
     // Piano state
     int  pianoInstrument = 0;   // index into piano instrument list
@@ -275,6 +363,122 @@ struct AppState
 };
 
 static AppState g_app;
+
+// =============================================================================
+// SOUND SYSTEM INIT/TEARDOWN
+// =============================================================================
+
+// SDL audio callback - mixes both modules
+static void sdl_audio_callback(void* userdata, Uint8* stream, int len)
+{
+    AppState* app = static_cast<AppState*>(userdata);
+    int16_t* buffer = reinterpret_cast<int16_t*>(stream);
+    int frames = len / 4; // stereo 16-bit
+
+    // Clear buffer first
+    std::memset(buffer, 0, len);
+
+    // Mix music module
+    if (app->music_module) {
+        fm_mix(app->music_module, buffer, frames);
+    }
+
+    // Mix SFX module (additive mixing)
+    if (app->sfx_module) {
+        // For additive mixing, we need to accumulate
+        // For simplicity, just mix SFX for now
+        int16_t* sfx_buffer = new int16_t[frames * 2];
+        std::memset(sfx_buffer, 0, frames * 2 * sizeof(int16_t));
+        fm_mix(app->sfx_module, sfx_buffer, frames);
+
+        // Simple additive mix with clipping prevention
+        for (int i = 0; i < frames * 2; i++) {
+            int mixed = static_cast<int>(buffer[i]) + static_cast<int>(sfx_buffer[i]);
+            mixed = std::max(-32768, std::min(32767, mixed));
+            buffer[i] = static_cast<int16_t>(mixed);
+        }
+        delete[] sfx_buffer;
+    }
+}
+
+static bool start_sound_system(AppState& app)
+{
+    if (app.sound_running) return true;
+
+    // Create music module (for songs - not used yet)
+    app.music_module = fm_module_create(app.sample_rate, app.buffer_frames, app.chip_type);
+    if (!app.music_module) {
+        std::fprintf(stderr, "Failed to create music module\n");
+        return false;
+    }
+
+    // Create SFX module (for piano)
+    app.sfx_module = fm_module_create(app.sample_rate, app.buffer_frames, app.chip_type);
+    if (!app.sfx_module) {
+        std::fprintf(stderr, "Failed to create SFX module\n");
+        fm_module_destroy(app.music_module);
+        app.music_module = nullptr;
+        return false;
+    }
+
+    // Load patches into SFX module
+    fm_patch_set(app.sfx_module, 0x00, &PATCH_00, sizeof(PATCH_00), FM_CHIP_OPN);
+    fm_patch_set(app.sfx_module, 0x01, &PATCH_01, sizeof(PATCH_01), FM_CHIP_OPN);
+    fm_patch_set(app.sfx_module, 0x02, &PATCH_HIHAT, sizeof(PATCH_HIHAT), FM_CHIP_OPN);
+    fm_patch_set(app.sfx_module, 0x20, &PATCH_KICK, sizeof(PATCH_KICK), FM_CHIP_OPN);
+    fm_patch_set(app.sfx_module, 0x21, &PATCH_SNARE, sizeof(PATCH_SNARE), FM_CHIP_OPN);
+    fm_patch_set(app.sfx_module, 0x23, &PATCH_CLANG, sizeof(PATCH_CLANG), FM_CHIP_OPN);
+
+    // Open SDL audio device
+    SDL_AudioSpec desired{};
+    desired.freq     = app.sample_rate;
+    desired.format   = AUDIO_S16SYS;
+    desired.channels = 2;
+    desired.samples  = static_cast<Uint16>(app.buffer_frames);
+    desired.callback = sdl_audio_callback;
+    desired.userdata = &app;
+
+    SDL_AudioSpec obtained{};
+    app.audio_dev = SDL_OpenAudioDevice(nullptr, 0, &desired, &obtained, 0);
+    if (app.audio_dev == 0) {
+        std::fprintf(stderr, "SDL_OpenAudioDevice failed: %s\n", SDL_GetError());
+        fm_module_destroy(app.sfx_module);
+        fm_module_destroy(app.music_module);
+        app.sfx_module = nullptr;
+        app.music_module = nullptr;
+        return false;
+    }
+
+    std::printf("[new_demo] Sound started: %d Hz, %d samples\n", obtained.freq, obtained.samples);
+
+    SDL_PauseAudioDevice(app.audio_dev, 0);
+    app.sound_running = true;
+
+    return true;
+}
+
+static void stop_sound_system(AppState& app)
+{
+    if (!app.sound_running) return;
+
+    if (app.audio_dev) {
+        SDL_CloseAudioDevice(app.audio_dev);
+        app.audio_dev = 0;
+    }
+
+    if (app.sfx_module) {
+        fm_module_destroy(app.sfx_module);
+        app.sfx_module = nullptr;
+    }
+
+    if (app.music_module) {
+        fm_module_destroy(app.music_module);
+        app.music_module = nullptr;
+    }
+
+    app.sound_running = false;
+    std::printf("[new_demo] Sound stopped\n");
+}
 
 // =============================================================================
 // UI PANEL
@@ -300,30 +504,99 @@ static void drawPanel(AppState& app)
     // SECTION 1 — HARDWARE
     // =========================================================================
     ImGui::SeparatorText("Hardware");
-    ImGui::Text("Chip: YM2612 / YM3438");
-    ImGui::Text("Sample rate: 44100 Hz");
-    ImGui::Text("Buffer: 256 samples");
+    ImGui::BeginDisabled(app.sound_running);
+    {
+        // Chip selector
+        static const char* CHIP_LBLS[] = { "YM2612 / YM3438 (OPN)" };
+        ImGui::Text("Chip"); ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1.f);
+        if (ImGui::BeginCombo("##chip", CHIP_LBLS[0])) {
+            if (ImGui::Selectable(CHIP_LBLS[0], true)) {}
+            ImGui::EndCombo();
+        }
+
+        // Sample rate selector
+        static const int RATES[]     = { 11025, 22050, 44100, 48000 };
+        static const char* RATE_LBLS[] = { "11025 Hz", "22050 Hz", "44100 Hz", "48000 Hz" };
+        int rateIdx = 2; // default 44100
+        for (int i = 0; i < 4; i++) if (RATES[i] == app.sample_rate) rateIdx = i;
+
+        ImGui::Text("Sample rate"); ImGui::SameLine(); ImGui::SetNextItemWidth(110.f);
+        if (ImGui::BeginCombo("##rate", RATE_LBLS[rateIdx])) {
+            for (int i = 0; i < 4; i++) {
+                if (ImGui::Selectable(RATE_LBLS[i], i == rateIdx)) {
+                    app.sample_rate = RATES[i];
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        // Buffer size selector
+        static const int BUFS[]      = { 256, 512, 1024, 2048 };
+        static const char* BUF_LBLS[] = { "256", "512", "1024", "2048" };
+        int bufIdx = 0; // default 256
+        for (int i = 0; i < 4; i++) if (BUFS[i] == app.buffer_frames) bufIdx = i;
+
+        ImGui::SameLine(); ImGui::Text("Buffer"); ImGui::SameLine(); ImGui::SetNextItemWidth(-1.f);
+        if (ImGui::BeginCombo("##buf", BUF_LBLS[bufIdx])) {
+            for (int i = 0; i < 4; i++) {
+                if (ImGui::Selectable(BUF_LBLS[i], i == bufIdx)) {
+                    app.buffer_frames = BUFS[i];
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+    ImGui::EndDisabled();
 
     // =========================================================================
     // SECTION 2 — PLAYBACK
     // =========================================================================
     ImGui::SeparatorText("Playback");
     ImGui::Spacing();
-    ImGui::TextDisabled("Engine stopped.");
-    ImGui::Spacing();
-    ImGui::TextDisabled("New API integration pending...");
+
+    if (!app.sound_running) {
+        ImGui::TextDisabled("Engine stopped.");
+        ImGui::Spacing();
+
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.15f, 0.35f, 0.15f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.5f,  0.25f, 1.f));
+        if (ImGui::Button("Start Sound System", ImVec2(-1, 0))) {
+            if (!start_sound_system(app)) {
+                std::fprintf(stderr, "Failed to start sound system\n");
+            }
+        }
+        ImGui::PopStyleColor(2);
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.9f, 0.4f, 1.f));
+        ImGui::Text("●  RUNNING");
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::Text("%d Hz  buf %d", app.sample_rate, app.buffer_frames);
+        ImGui::Spacing();
+
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.4f, 0.08f, 0.08f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.12f, 0.12f, 1.f));
+        if (ImGui::Button("Stop Sound System", ImVec2(-1, 0))) {
+            stop_sound_system(app);
+            // Reset piano state
+            app.pianoHeldNote = -1;
+            for (int k = 0; k < 12; k++) app.pianoKeyHeld[k] = false;
+        }
+        ImGui::PopStyleColor(2);
+    }
 
     // =========================================================================
     // SECTION 3 — SONGS
     // =========================================================================
     ImGui::SeparatorText("Songs");
-    ImGui::TextDisabled("No songs loaded.");
+    ImGui::TextDisabled("Song system not yet implemented.");
 
     // =========================================================================
     // SECTION 4 — CACHE
     // =========================================================================
     ImGui::SeparatorText("Cache");
-    ImGui::TextDisabled("No cache recorded.");
+    ImGui::TextDisabled("Cache system not yet implemented.");
 
     // =========================================================================
     // SECTION 5 — MIXER
@@ -335,7 +608,7 @@ static void drawPanel(AppState& app)
     // SECTION 6 — SOUND EFFECTS
     // =========================================================================
     ImGui::SeparatorText("Sound Effects");
-    ImGui::TextDisabled("SFX controls pending...");
+    ImGui::TextDisabled("SFX system pending...");
 
     // =========================================================================
     // SECTION 7 — INSTRUMENTS
@@ -358,6 +631,9 @@ static void drawPanel(AppState& app)
 
 static void drawPiano(AppState& app)
 {
+    // Only draw piano when sound is running
+    if (!app.sound_running) return;
+
     ImGuiIO& io = ImGui::GetIO();
     const float winW   = io.DisplaySize.x;
     const float winH   = io.DisplaySize.y;
@@ -464,7 +740,11 @@ static void drawPiano(AppState& app)
 
         if (clickedNote >= 0 && mclick) {
             int midiNote = PIANO_BASE_NOTE + clickedNote;
-            // Visual feedback only for now - audio will be added with new API
+            // Trigger note if sound is running
+            if (app.sound_running && app.sfx_module) {
+                fm_note_off(app.sfx_module, 0); // release previous
+                fm_note_on(app.sfx_module, midiNote, PIANO_INSTRS[app.pianoInstrument].patchId, 0);
+            }
             app.pianoHeldNote = midiNote;
         }
     }
@@ -473,6 +753,10 @@ static void drawPiano(AppState& app)
         int heldSemi = app.pianoHeldNote - PIANO_BASE_NOTE;
         bool kbHeld = (heldSemi >= 0 && heldSemi < 12) ? app.pianoKeyHeld[heldSemi] : false;
         if (!kbHeld) {
+            // Release note if sound is running
+            if (app.sound_running && app.sfx_module) {
+                fm_note_off(app.sfx_module, 0);
+            }
             app.pianoHeldNote = -1;
         }
     }
@@ -517,11 +801,16 @@ static void mainTick()
                 emscripten_cancel_main_loop();
 #endif
             }
-            // Piano keys — visual feedback only (audio will be added with new API)
+            // Piano keys — trigger notes when sound is running
             for (int k = 0; k < 12; k++) {
                 if (e.key.keysym.sym == PIANO_KEYS[k]) {
                     app.pianoKeyHeld[k] = true;
-                    app.pianoHeldNote = PIANO_BASE_NOTE + k;
+                    int midiNote = PIANO_BASE_NOTE + k;
+                    if (app.sound_running && app.sfx_module) {
+                        fm_note_off(app.sfx_module, 0); // release previous
+                        fm_note_on(app.sfx_module, midiNote, PIANO_INSTRS[app.pianoInstrument].patchId, 0);
+                    }
+                    app.pianoHeldNote = midiNote;
                     break;
                 }
             }
@@ -538,12 +827,21 @@ static void mainTick()
                             if (app.pianoKeyHeld[j]) { anyHeld = true; break; }
                         }
                         if (!anyHeld) {
+                            // Release note if sound is running
+                            if (app.sound_running && app.sfx_module) {
+                                fm_note_off(app.sfx_module, 0);
+                            }
                             app.pianoHeldNote = -1;
                         } else {
                             // Switch to the other held key
                             for (int j = 0; j < 12; j++) {
                                 if (app.pianoKeyHeld[j]) {
-                                    app.pianoHeldNote = PIANO_BASE_NOTE + j;
+                                    int midiNote = PIANO_BASE_NOTE + j;
+                                    if (app.sound_running && app.sfx_module) {
+                                        fm_note_off(app.sfx_module, 0);
+                                        fm_note_on(app.sfx_module, midiNote, PIANO_INSTRS[app.pianoInstrument].patchId, 0);
+                                    }
+                                    app.pianoHeldNote = midiNote;
                                     break;
                                 }
                             }
@@ -624,7 +922,8 @@ int main(int /*argc*/, char** /*argv*/)
 
     printf("=== ingamefm new_demo ===\n");
     printf("Aurora shader running.\n");
-    printf("Esc to quit.\n\n");
+    printf("Click 'Start Sound System' to enable audio.\n");
+    printf("Keys: Z-M = piano  |  Esc = quit\n\n");
 
 #ifdef __EMSCRIPTEN__
     emscripten_set_main_loop(mainTick, 0, 1);
@@ -634,6 +933,7 @@ int main(int /*argc*/, char** /*argv*/)
     }
 #endif
 
+    stop_sound_system(app);
     app.aurora.shutdown();
     app.imgui.shutdown();
     SDL_GL_DeleteContext(app.glCtx);

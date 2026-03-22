@@ -92,23 +92,24 @@ extern "C" {
 
 typedef struct fm_patch_opn_operator
 {
-    uint8_t dt;     /* detune */
-    uint8_t mul;    /* frequency multiplier */
-    uint8_t tl;     /* total level */
-    uint8_t rs;     /* rate scale */
-    uint8_t ar;     /* attack rate */
-    uint8_t dr;     /* decay rate */
-    uint8_t sr;     /* sustain rate */
-    uint8_t rr;     /* release rate */
-    uint8_t sl;     /* sustain level */
-    uint8_t ssgeg;  /* SSG-EG (OPN specific) */
+    int8_t  DT;     /* detune (-3..+3) */
+    uint8_t MUL;    /* frequency multiplier */
+    uint8_t TL;     /* total level */
+    uint8_t RS;     /* rate scale */
+    uint8_t AR;     /* attack rate */
+    uint8_t AM;     /* amplitude modulation enable */
+    uint8_t DR;     /* decay rate */
+    uint8_t SR;     /* sustain rate */
+    uint8_t SL;     /* sustain level */
+    uint8_t RR;     /* release rate */
+    uint8_t SSG;    /* SSG-EG (OPN specific) */
 } fm_patch_opn_operator;
 
 typedef struct fm_patch_opn
 {
-    uint8_t alg;     /* algorithm */
-    uint8_t fb;      /* feedback */
-    uint8_t lfo;     /* LFO enable / sensitivity */
+    uint8_t ALG;     /* algorithm */
+    uint8_t FB;      /* feedback */
+    uint8_t LFO;     /* LFO enable / sensitivity */
 
     fm_patch_opn_operator op[4]; /* 4 operators */
 } fm_patch_opn;

@@ -5,6 +5,7 @@ em++ -std=c++17 -O2 \
     -I../bowling/3rdparty/SDL/include \
     -I../bowling/3rdparty/imgui \
     -I../my-ym2612-plugin/build/_deps/ymfm-src/src/ \
+    -I. \
     ../my-ym2612-plugin/build/_deps/ymfm-src/src/ymfm_misc.cpp \
     ../my-ym2612-plugin/build/_deps/ymfm-src/src/ymfm_adpcm.cpp \
     ../my-ym2612-plugin/build/_deps/ymfm-src/src/ymfm_ssg.cpp \
@@ -15,6 +16,7 @@ em++ -std=c++17 -O2 \
     ../bowling/3rdparty/imgui/imgui_widgets.cpp \
     ../bowling/3rdparty/imgui/backends/imgui_impl_sdl2.cpp \
     ../bowling/3rdparty/imgui/backends/imgui_impl_opengl3.cpp \
+    new_impl.cpp \
     new_demo.cpp \
     -s USE_SDL=2 \
     -s FULL_ES3=1 \
