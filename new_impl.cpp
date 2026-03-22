@@ -700,26 +700,33 @@ fm_voice_id fm_sfx_play(fm_module* m, fm_sfx_id id, int priority)
     int best_slot = -1;  // active_sfx slot to clear
     int best_priority = priority + 1;  // Start higher than our priority
     int best_age = 0;
+    bool found_free = false;
     
+    // First pass: look for any free voice
     for (int i = 0; i < 6; i++) {
         if (!m->voices[i].active) {
-            // Free voice - take it immediately
             best_voice = i;
             best_slot = -1;
-            break;
+            found_free = true;
+            break;  // Take the first free voice
         }
-        
-        // Check if we can steal this voice
-        if (m->voices[i].priority < best_priority ||
-            (m->voices[i].priority == best_priority && m->voices[i].age > best_age)) {
-            best_voice = i;
-            best_priority = m->voices[i].priority;
-            best_age = m->voices[i].age;
-            // Find the active_sfx slot for this voice
-            for (int slot = 0; slot < 6; slot++) {
-                if (m->active_sfx[slot].active && m->active_sfx[slot].voice_idx == i) {
-                    best_slot = slot;
-                    break;
+    }
+    
+    // Second pass: if no free voice, find one to steal
+    if (!found_free) {
+        for (int i = 0; i < 6; i++) {
+            // Check if we can steal this voice
+            if (m->voices[i].priority < best_priority ||
+                (m->voices[i].priority == best_priority && m->voices[i].age > best_age)) {
+                best_voice = i;
+                best_priority = m->voices[i].priority;
+                best_age = m->voices[i].age;
+                // Find the active_sfx slot for this voice
+                for (int slot = 0; slot < 6; slot++) {
+                    if (m->active_sfx[slot].active && m->active_sfx[slot].voice_idx == i) {
+                        best_slot = slot;
+                        break;
+                    }
                 }
             }
         }
