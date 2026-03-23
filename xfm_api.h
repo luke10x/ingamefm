@@ -401,12 +401,34 @@ void xfm_note_off(xfm_module* m, xfm_voice_id v);
  * ============================================================================= */
 
 /**
- * Mix audio into buffer.
+ * Mix audio from module into buffer.
+ * Processes both song and SFX if active.
  *
+ * @param m module
  * @param stream interleaved stereo (int16_t)
  * @param frames number of frames (L+R pairs)
  */
 void xfm_mix(xfm_module* m, int16_t* stream, int frames);
+
+/**
+ * Mix audio from music module (song only).
+ * Use this for dedicated music modules.
+ *
+ * @param m module
+ * @param stream interleaved stereo (int16_t)
+ * @param frames number of frames (L+R pairs)
+ */
+void xfm_mix_song(xfm_module* m, int16_t* stream, int frames);
+
+/**
+ * Mix audio from SFX module (SFX only).
+ * Use this for dedicated SFX modules.
+ *
+ * @param m module
+ * @param stream interleaved stereo (int16_t)
+ * @param frames number of frames (L+R pairs)
+ */
+void xfm_mix_sfx(xfm_module* m, int16_t* stream, int frames);
 
 #ifdef __cplusplus
 }

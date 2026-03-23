@@ -1370,12 +1370,53 @@ void xfm_note_off(xfm_module* m, xfm_voice_id v)
 // AUDIO OUTPUT
 // =============================================================================
 
+void xfm_mix_song(xfm_module* m, int16_t* stream, int frames)
+{
+    if (!m || !m->chip) {
+        std::memset(stream, 0, frames * 2 * sizeof(int16_t));
+        return;
+    }
+
+    // Update song only
+    update_song(m, frames);
+
+    // Generate from chip using Bresenham for correct pitch
+    m->chip->generate_buffer(stream, frames, m->sample_rate);
+
+    // Apply volume
+    float vol = m->volume;
+    if (vol < 1.0f) {
+        for (int i = 0; i < frames * 2; i++) {
+            stream[i] = static_cast<int16_t>(stream[i] * vol);
+        }
+    }
+}
+
+void xfm_mix_sfx(xfm_module* m, int16_t* stream, int frames)
+{
+    if (!m || !m->chip) {
+        std::memset(stream, 0, frames * 2 * sizeof(int16_t));
+        return;
+    }
+
+    // Update SFX only
+    update_sfx(m, frames);
+
+    // Generate from chip using Bresenham for correct pitch
+    m->chip->generate_buffer(stream, frames, m->sample_rate);
+
+    // Apply volume
+    float vol = m->volume;
+    if (vol < 1.0f) {
+        for (int i = 0; i < frames * 2; i++) {
+            stream[i] = static_cast<int16_t>(stream[i] * vol);
+        }
+    }
+}
+
 void xfm_mix(xfm_module* m, int16_t* stream, int frames)
 {
-    if (!m) return;
-
-    // Chip must exist
-    if (!m->chip) {
+    if (!m || !m->chip) {
         std::memset(stream, 0, frames * 2 * sizeof(int16_t));
         return;
     }
@@ -1402,7 +1443,7 @@ void xfm_mix(xfm_module* m, int16_t* stream, int frames)
         }
     }
 
-    // Update active song and SFX for each sample in the buffer
+    // Update both song and SFX
     update_song(m, frames);
     update_sfx(m, frames);
 

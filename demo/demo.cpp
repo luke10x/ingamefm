@@ -557,18 +557,18 @@ static void sdl_audio_callback(void* userdata, Uint8* stream, int len)
     // Clear buffer first
     std::memset(buffer, 0, len);
 
-    // Mix music module
+    // Mix music module (song only - more efficient!)
     if (app->music_module) {
-        xfm_mix(app->music_module, buffer, frames);
+        xfm_mix_song(app->music_module, buffer, frames);
     }
 
-    // Mix SFX module (additive mixing)
+    // Mix SFX module (SFX only - more efficient!)
     if (app->sfx_module) {
         // For additive mixing, we need to accumulate
         // For simplicity, just mix SFX for now
         int16_t* sfx_buffer = new int16_t[frames * 2];
         std::memset(sfx_buffer, 0, frames * 2 * sizeof(int16_t));
-        xfm_mix(app->sfx_module, sfx_buffer, frames);
+        xfm_mix_sfx(app->sfx_module, sfx_buffer, frames);
 
         // Simple additive mix with clipping prevention
         for (int i = 0; i < frames * 2; i++) {
