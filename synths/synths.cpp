@@ -231,13 +231,28 @@ static AppState g_app;
 // =============================================================================
 // Audio Callback
 // =============================================================================
-
-static void sdl_audio_callback(void* userdata, Uint8* stream, int len) {
+static void sdl_audio_callback(void* userdata, Uint8* stream, int len)
+{
+    // Cast userdata back to our AppState
     AppState* app = static_cast<AppState*>(userdata);
+    
+    // Cast stream to 16-bit signed integers (AUDIO_S16SYS format)
     int16_t* buffer = reinterpret_cast<int16_t*>(stream);
+    
+    // Calculate number of stereo frames
+    // len is in bytes, each stereo frame = 4 bytes (2 channels × 2 bytes)
     int frames = len / 4;
+    
+    // Example: len = 1024 bytes → frames = 256 stereo frames
+    
+    // Clear buffer first (prevents garbage/noise)
     std::memset(buffer, 0, len);
-    if (app->synth_module) xfm_mix(app->synth_module, buffer, frames);
+    
+    // Mix music module (song only - more efficient!)
+    // xfm_mix_song generates 'frames' stereo samples into buffer
+    if (app->synth_module) {
+        xfm_mix_sfx(app->synth_module, buffer, frames);
+    }
 }
 
 // =============================================================================

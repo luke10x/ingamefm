@@ -126,7 +126,16 @@ public:
     // Generate 'samples' stereo frames at given sample_rate using Bresenham
     // to maintain correct pitch at any output rate
     void generate_buffer(int16_t* stream, int samples, int sample_rate) {
-        static constexpr int REF_RATE = 44100;
+
+        /*
+        Clocking
+        The general philosophy of the emulators provided here is that they are clock-independent. Much like the actual chips, you (the consumer) control the clock; 
+        the chips themselves have no idea what time it is. They just tick forward each time you ask them to.
+
+        But what if I want to output at a "normal" rate, like 44.1kHz? Sorry, you'll have to rate convert as needed.
+        */
+        static int REF_RATE = chip.sample_rate(YM_CLOCK);
+
         static int acc_err = 0;
         
         for (int i = 0; i < samples; i++) {
@@ -1052,6 +1061,7 @@ static void song_process_row(xfm_module* m, int row_idx)
 
     XfmSongPattern& pat = m->song_patterns[song.song_id];
     if (row_idx >= pat.num_rows) return;
+
 
     // Process each channel
     for (int ch = 0; ch < pat.num_channels && ch < 6; ch++) {
