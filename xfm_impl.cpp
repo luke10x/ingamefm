@@ -242,6 +242,10 @@ struct XfmSongChannel {
     bool            pending_has_note;
     bool            pending_is_off;
     int             pending_gap;  // Gap samples before key-on
+    
+    // For automatic OFF: when a new note arrives, previous note gets
+    // keyed off at sample 1, and new note waits until end of row
+    bool            wait_for_next_row;  // Delay keyon until next row starts
 };
 
 // Song pattern (multi-channel)
@@ -404,6 +408,7 @@ xfm_module* xfm_module_create(int sample_rate, int buffer_frames, xfm_chip_type 
         m->active_song.channels[ch].current_volume = 127;
         m->active_song.channels[ch].pending_has_note = false;
         m->active_song.channels[ch].pending_is_off = false;
+        m->active_song.channels[ch].wait_for_next_row = false;
     }
 
     // Initialize pending song
@@ -1055,6 +1060,7 @@ static int find_next_note_row(XfmSongPattern& pat, int start_row, int ch)
 }
 
 // Process a row for the active song - called at END of previous row
+// Sets up pending notes. Key-off of previous notes happens at sample 1 of new row.
 static void song_process_row(xfm_module* m, int row_idx)
 {
     XfmActiveSong& song = m->active_song;
@@ -1063,7 +1069,6 @@ static void song_process_row(xfm_module* m, int row_idx)
 
     XfmSongPattern& pat = m->song_patterns[song.song_id];
     if (row_idx >= pat.num_rows) return;
-
 
     // Process each channel
     for (int ch = 0; ch < pat.num_channels && ch < 6; ch++) {
@@ -1075,58 +1080,43 @@ static void song_process_row(xfm_module* m, int row_idx)
         if (ev.volume >= 0) ch_state.current_volume = ev.volume;
 
         if (ev.note == -2) {
-            // OFF note - key off immediately and reset channel
-            m->chip->key_off(ch);
-            m->channel_active[ch] = false;
+            // OFF note - mark for key off at sample 1
             ch_state.pending_has_note = false;
             ch_state.pending_is_off = true;
             ch_state.pending_gap = get_min_gap_samples(m->sample_rate);
         } else if (ev.note >= 0) {
-            // New note - key off immediately to stop previous note
-            m->chip->key_off(ch);
-            m->channel_active[ch] = false;
+            // New note on this channel
+            // Check if channel is still playing from previous row
+            bool was_playing = m->channel_active[ch];
             
-            // Fully reset channel state before new note
-            ch_state.pending_has_note = false;
-            ch_state.pending_is_off = false;
+            // Key off happens at sample 1 of this row in update_song()
+            // The new note will wait until end of this row (simulates manual OFF row)
+            ch_state.wait_for_next_row = was_playing;
 
             // Look ahead to find next note on this channel
             int next_note_row = find_next_note_row(pat, row_idx, ch);
+
+            // Calculate gap for clean release
             if (next_note_row >= 0) {
-                // Calculate distance to next note in samples
                 int rows_until_next = next_note_row - row_idx;
-                int samples_until_next = rows_until_next * pat.samples_per_row;
-                
-                // If next note is very close (< 10ms), skip gap entirely
-                int threshold = (440 * m->sample_rate) / 44100;  // ~10ms
-                if (samples_until_next < threshold) {
-                    ch_state.pending_gap = 0;  // No gap - immediate keyon
-                } else {
-                    // Normal case - use dynamic gap for RR release
-                    int gap = get_min_gap_samples(m->sample_rate) + (rows_until_next * pat.samples_per_row * 4 / 10);
-                    int max_gap = (250 * m->sample_rate) / 44100;
-                    ch_state.pending_gap = std::min(max_gap, gap);
-                }
+                ch_state.pending_gap = get_dynamic_gap(m->sample_rate, rows_until_next, pat.samples_per_row);
             } else {
-                // No next note - use default gap
                 ch_state.pending_gap = get_min_gap_samples(m->sample_rate);
             }
 
-            // Key off immediately
-            m->chip->key_off(ch);
-            m->channel_active[ch] = false;
-
-            // Mark for key-on after gap
+            // Mark for key-on after gap (or at end of row if waiting)
             ch_state.pending_has_note = true;
             ch_state.pending_note = ev.note;
             ch_state.pending_patch = ch_state.current_patch;
             ch_state.pending_volume = ch_state.current_volume;
+        } else {
+            // ev.note == -1: no new note, keep previous state
         }
-        // If ev.note == -1, keep previous state (no change)
     }
 }
 
 // Commit pending notes for active song (after gap samples)
+// If wait_for_next_row is set, keyon happens at end of row instead
 static void song_commit_keyon(xfm_module* m, int current_gap)
 {
     XfmActiveSong& song = m->active_song;
@@ -1138,36 +1128,13 @@ static void song_commit_keyon(xfm_module* m, int current_gap)
         if (ch_state.pending_patch < 0) continue;
         if (!m->patch_present[ch_state.pending_patch]) continue;
         
-        // If gap is 0, key on immediately (fast passage)
-        if (ch_state.pending_gap == 0) {
-            // Load patch and key on immediately
-            xfm_patch_opn patch = m->patches[ch_state.pending_patch];
-            int tl_add = ((0x7F - ch_state.current_volume) * 127) / 0x7F;
-            bool isCarrier[4] = {false, false, false, false};
-            switch(patch.ALG) {
-                case 0: case 1: case 2: case 3: isCarrier[3] = true; break;
-                case 4: isCarrier[1] = isCarrier[3] = true; break;
-                case 5: case 6: isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
-                case 7: isCarrier[0] = isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
-            }
-            for(int op = 0; op < 4; op++) {
-                if(isCarrier[op]) {
-                    patch.op[op].TL = std::min(127, (int)patch.op[op].TL + tl_add);
-                }
-            }
-            m->chip->load_patch(patch, ch);
-            m->current_patch[ch] = ch_state.pending_patch;
-            // Re-apply LFO settings after loading patch
-            m->chip->enable_lfo(m->lfo_enable, static_cast<uint8_t>(m->lfo_freq));
-            double hz = 440.0 * std::pow(2.0, (ch_state.pending_note - 69) / 12.0);
-            m->chip->set_frequency(ch, hz, 0);
-            m->chip->key_on(ch);
-            m->channel_active[ch] = true;
-            ch_state.pending_has_note = false;
+        // If waiting for next row, skip keyon here (happens at row boundary)
+        if (ch_state.wait_for_next_row) {
             continue;
         }
 
         // Wait until gap has fully elapsed before keying on
+        // This ensures previous note's release envelope completes
         if (current_gap < ch_state.pending_gap) {
             continue;
         }
@@ -1232,6 +1199,7 @@ void xfm_song_play(xfm_module* m, xfm_song_id id, bool loop)
         m->active_song.channels[ch].pending_has_note = false;
         m->active_song.channels[ch].pending_is_off = false;
         m->active_song.channels[ch].pending_gap = get_min_gap_samples(m->sample_rate);
+        m->active_song.channels[ch].wait_for_next_row = false;
     }
 
     // Process first row (sets up pending notes - will be triggered in update_song)
@@ -1370,6 +1338,19 @@ static void update_song(xfm_module* m, int num_samples)
 
         song.sample_in_row++;
 
+        // At START of new row (sample 1), key off any active notes that have a new note pending
+        // This gives a full row of release time before the next note
+        if (song.sample_in_row == 1) {
+            for (int ch = 0; ch < 6; ch++) {
+                XfmSongChannel& ch_state = song.channels[ch];
+                // Key off if channel is active AND there's a new note waiting
+                if (m->channel_active[ch] && ch_state.pending_has_note) {
+                    m->chip->key_off(ch);
+                    m->channel_active[ch] = false;
+                }
+            }
+        }
+
         // At END of gap, commit key-on for pending notes
         // Pass current gap (sample_in_row) to check per-channel gaps
         song_commit_keyon(m, song.sample_in_row);
@@ -1378,6 +1359,39 @@ static void update_song(xfm_module* m, int num_samples)
         if (song.sample_in_row >= pat.samples_per_row) {
             song.sample_in_row = 0;
             song.current_row++;
+            
+            // Key on notes that were waiting for next row
+            // This happens AFTER the full row of release
+            for (int ch = 0; ch < 6; ch++) {
+                XfmSongChannel& ch_state = song.channels[ch];
+                if (ch_state.pending_has_note && ch_state.wait_for_next_row) {
+                    // Load patch and key on
+                    xfm_patch_opn patch = m->patches[ch_state.pending_patch];
+                    int tl_add = ((0x7F - ch_state.current_volume) * 127) / 0x7F;
+                    bool isCarrier[4] = {false, false, false, false};
+                    switch(patch.ALG) {
+                        case 0: case 1: case 2: case 3: isCarrier[3] = true; break;
+                        case 4: isCarrier[1] = isCarrier[3] = true; break;
+                        case 5: case 6: isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
+                        case 7: isCarrier[0] = isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
+                    }
+                    for(int op = 0; op < 4; op++) {
+                        if(isCarrier[op]) {
+                            patch.op[op].TL = std::min(127, (int)patch.op[op].TL + tl_add);
+                        }
+                    }
+                    m->chip->load_patch(patch, ch);
+                    m->current_patch[ch] = ch_state.pending_patch;
+                    m->chip->enable_lfo(m->lfo_enable, static_cast<uint8_t>(m->lfo_freq));
+                    double hz = 440.0 * std::pow(2.0, (ch_state.pending_note - 69) / 12.0);
+                    m->chip->set_frequency(ch, hz, 0);
+                    m->chip->key_on(ch);
+                    m->channel_active[ch] = true;
+                    ch_state.pending_has_note = false;
+                    ch_state.wait_for_next_row = false;
+                    ch_state.pending_gap = get_min_gap_samples(m->sample_rate);
+                }
+            }
 
             // Check for pending song change with STEP timing
             if (m->pending_song.pending && m->pending_song.timing == FM_SONG_SWITCH_STEP) {
