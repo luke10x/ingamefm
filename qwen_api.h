@@ -66,7 +66,7 @@ typedef enum FMError {
 
 /* =============================================================================
  * 2. YM2612 PATCH FORMAT
- *    Compatible with demo7.cpp YM2612Patch struct.
+ *    Compatible with YM2612Patch struct in ingamefm_patchlib.h.
  * ============================================================================= */
 
 typedef struct FMOperator {

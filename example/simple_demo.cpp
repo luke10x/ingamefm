@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Create a simple window (like demo2.cpp)
+    // Create a simple window
     SDL_Window* window = SDL_CreateWindow(
         "eggsfm Demo — SPACE/K/L=drums, Z-M=piano, ESC=quit",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
     std::printf("Piano: Z S X D C V G B H N J M (C4-B4)\n");
     std::printf("ESC to quit\n\n");
 
-    // Main event loop (like demo2.cpp)
+    // Main event loop
     int running = 1;
     SDL_Event e;
     while (running) {

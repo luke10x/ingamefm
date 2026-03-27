@@ -84,7 +84,9 @@ public:
 
         hz *= std::pow(2.0, static_cast<double>(octaveOffset));
 
-        static constexpr double FREF = 44100.0;
+        // FREF = chip's native sample rate at YM_CLOCK
+        // YM2612: internal clock = master / 6, sample rate = internal / 24 = master / 144
+        static constexpr double FREF = static_cast<double>(YM_CLOCK) / 144.0;
         int block = 4;
         double fn = hz * static_cast<double>(1 << (21 - block)) / FREF;
         while (fn > 0x7FF && block < 7) { block++; fn /= 2.0; }

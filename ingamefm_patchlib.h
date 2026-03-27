@@ -197,20 +197,22 @@ public:
     // Set frequency for channel ch (0-5).
     // octaveOffset: additional octave shift (from patch BLOCK field).
     // sample_rate: accepted for API compatibility but not used — pitch is
-    // always computed with fref=44100 to match generate()'s REF_RATE.
+    // always computed with fref=chip.sample_rate() to match generate()'s REF_RATE.
     //
-    // generate() calls chip.generate() 44100 times/sec regardless of SDL rate.
-    // So chip's effective output rate is always 44100 Hz, and FNUM must be
-    // computed against that fixed reference: FNUM = hz * 2^(21-B) / 44100.
-    // This makes pitch identical at 22050, 44100, and 48000 Hz.
-    void set_frequency(int ch, double hz, int octaveOffset = 0, int /*sample_rate*/ = 44100)
+    // generate() calls chip.generate() at chip's native rate regardless of SDL rate.
+    // So chip's effective output rate is always its native rate, and FNUM must be
+    // computed against that fixed reference: FNUM = hz * 2^(21-B) / chip_native_rate.
+    // This makes pitch identical at any output sample rate.
+    void set_frequency(int ch, double hz, int octaveOffset = 0, int /*sample_rate*/ = 0)
     {
         const uint8_t port = (ch >= 3) ? 1 : 0;
         const int     hwch = ch % 3;
 
         hz *= std::pow(2.0, static_cast<double>(octaveOffset));
 
-        static constexpr double FREF = 44100.0;  // matches REF_RATE in generate()
+        // FREF = chip's native sample rate at YM_CLOCK
+        // YM2612: internal clock = master / 6, sample rate = internal / 24 = master / 144
+        static constexpr double FREF = static_cast<double>(YM_CLOCK) / 144.0;
         int block = 4;
         double fn = hz * static_cast<double>(1 << (21 - block)) / FREF;
         while (fn > 0x7FF && block < 7) { block++; fn /= 2.0; }
@@ -232,17 +234,18 @@ public:
 
     // Generate 'samples' stereo frames for an SDL device at sample_rate Hz.
     //
-    // All patches in ingamefm are designed for ymfm running at 44100 Hz
-    // (one chip.generate() call per output sample). To keep envelope timing
-    // consistent at any SDL sample rate, we use a Bresenham accumulator to
-    // call chip.generate() exactly 44100 times per second regardless of rate.
+    // All patches in ingamefm are designed for ymfm running at chip's native rate.
+    // To keep envelope timing consistent at any SDL sample rate, we use a Bresenham
+    // accumulator to call chip.generate() at chip's native rate regardless of output rate.
     //
-    // At 44100 Hz: 1 chip call/output sample (same as before, no change).
-    // At 22050 Hz: 2 chip calls/output sample → same 44100 EG advances/sec.
-    // At 48000 Hz: ~0.92 chip calls/output → same 44100 EG advances/sec.
+    // At output = chip native rate: 1 chip call/output sample.
+    // At lower rates: multiple chip calls/output sample → same EG advances/sec.
+    // At higher rates: fractional chip calls/output → same EG advances/sec.
     void generate(int16_t* stream, int samples, int sample_rate = 44100)
     {
-        static constexpr int REF_RATE = 44100;
+        // REF_RATE = chip's native sample rate at YM_CLOCK
+        // YM2612: internal clock = master / 6, sample rate = internal / 24 = master / 144
+        static constexpr int REF_RATE = static_cast<int>(YM_CLOCK / 144);  // ~53267 Hz
         for (int i = 0; i < samples; i++)
         {
             int16_t L, R;
