@@ -550,6 +550,32 @@ void xfm_mix_song(xfm_module* m, int16_t* stream, int frames);
  */
 void xfm_mix_sfx(xfm_module* m, int16_t* stream, int frames);
 
+/**
+ * @brief Set automatic note-off delay for song and SFX playback.
+ *
+ * When a new note starts on a channel that's still playing a previous note,
+ * the previous note is automatically keyed off with a configurable delay.
+ * This gives the previous note time to play before the release envelope starts.
+ *
+ * Applies to both song channels and SFX voices.
+ *
+ * @param m Module instance
+ * @param delay Delay as fraction of row (0.0 = immediate, 1.0 = full row)
+ *              Default is 0.3 (note plays for 30% of row, releases for 70%)
+ *
+ * @note Values near 1.0 may cause note bleeding into next note
+ * @note Values near 0.0 give maximum release time but shorter note duration
+ */
+void xfm_set_auto_off_delay(xfm_module* m, float delay);
+
+/**
+ * @brief Get current automatic note-off delay setting.
+ *
+ * @param m Module instance
+ * @return Current delay value (0.0 to 1.0)
+ */
+float xfm_get_auto_off_delay(xfm_module* m);
+
 #ifdef __cplusplus
 }
 #endif

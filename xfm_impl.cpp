@@ -223,6 +223,10 @@ struct XfmActiveSfx {
     int     pending_note;   // pending MIDI note
     int     pending_patch_id; // pending patch
     bool    active;         // is currently playing
+    
+    // Automatic note-off scheduling
+    bool    auto_off_scheduled;
+    int     auto_off_at_sample;
 };
 
 // Song channel event
@@ -317,6 +321,9 @@ struct xfm_module {
     bool            lfo_enable;
     int             lfo_freq;
 
+    // Automatic note off delay (0.0 = immediate, 1.0 = full row)
+    float           auto_off_delay;  // Default 0.3 (30% of row)
+
     // Note: For future OPM/OPL support, we would:
     //   - Add union { XfmChipOpn* opn; XfmChipOpm* opm; XfmChipOpl* opl; }
     //   - Switch on chip_type in all chip operations
@@ -348,6 +355,7 @@ xfm_module* xfm_module_create(int sample_rate, int buffer_frames, xfm_chip_type 
     m->lfo_enable    = false;
     m->lfo_freq      = 0;
     m->voice_age_counter = 0;
+    m->auto_off_delay = 0.3f;  // Default: 30% of row before key-off
 
     if (!m->chip) {
         delete m;
@@ -387,8 +395,8 @@ xfm_module* xfm_module_create(int sample_rate, int buffer_frames, xfm_chip_type 
         m->active_sfx[i].pending_note = -1;
         m->active_sfx[i].pending_patch_id = -1;
         m->active_sfx[i].pending_gap = get_min_gap_samples(m->sample_rate);
-        
-        
+        m->active_sfx[i].auto_off_scheduled = false;
+        m->active_sfx[i].auto_off_at_sample = 0;
         m->active_sfx[i].active = false;
     }
 
@@ -619,6 +627,7 @@ static int find_next_sfx_note_row(XfmSfxPattern& pat, int start_row)
 }
 
 // Process a row for an SFX voice (sets up pending note)
+// Implements automatic note-off delay for clean transitions
 static void sfx_process_row(xfm_module* m, int voice_idx, int row_idx)
 {
     XfmActiveSfx* sfx = nullptr;
@@ -640,38 +649,41 @@ static void sfx_process_row(xfm_module* m, int voice_idx, int row_idx)
         sfx->last_patch_id = ev.patch_id;
     }
 
+    // Clear auto-off scheduling from previous row
+    sfx->auto_off_scheduled = false;
+
     // Handle note
     sfx->pending_has_note = false;
     if (ev.note == -2) {
         // OFF note - key off
         m->chip->key_off(voice_idx);
+        m->channel_active[voice_idx] = false;
     } else if (ev.note >= 0) {
+        // New note - check if voice is still playing from previous row
+        bool was_playing = m->channel_active[voice_idx];
+        
+        // Schedule auto key-off at configured delay position
+        if (was_playing) {
+            sfx->auto_off_scheduled = true;
+            sfx->auto_off_at_sample = (int)(pat.samples_per_row * m->auto_off_delay);
+            if (sfx->auto_off_at_sample < 1) sfx->auto_off_at_sample = 1;
+        }
+
         // Look ahead to find next note
         int next_note_row = find_next_sfx_note_row(pat, row_idx);
         if (next_note_row >= 0) {
             // Calculate distance to next note in samples
             int rows_until_next = next_note_row - row_idx;
-            int samples_until_next = rows_until_next * pat.samples_per_row;
-            
-            // If next note is very close (< 10ms), skip gap entirely
-            int threshold = (440 * m->sample_rate) / 44100;  // ~10ms
-            if (samples_until_next < threshold) {
-                sfx->pending_gap = 0;  // No gap - immediate keyon
-            } else {
-                // Normal case - use dynamic gap for RR release
-                int gap = get_min_gap_samples(m->sample_rate) + (rows_until_next * pat.samples_per_row * 4 / 10);
-                int max_gap = (250 * m->sample_rate) / 44100;
-                sfx->pending_gap = std::min(max_gap, gap);
-            }
+            // Dynamic gap for RR release
+            int gap = get_min_gap_samples(m->sample_rate) + (rows_until_next * pat.samples_per_row * 4 / 10);
+            int max_gap = (250 * m->sample_rate) / 44100;
+            sfx->pending_gap = std::min(max_gap, gap);
         } else {
             // No next note - use default gap
             sfx->pending_gap = get_min_gap_samples(m->sample_rate);
         }
 
-        // Key off immediately
-        m->chip->key_off(voice_idx);
-        m->channel_active[voice_idx] = false;
-
+        // Mark for key-on after gap
         sfx->pending_has_note = true;
         sfx->pending_note = ev.note;
         sfx->pending_patch_id = (ev.patch_id >= 0) ? ev.patch_id : sfx->last_patch_id;
@@ -813,7 +825,9 @@ xfm_voice_id xfm_sfx_play(xfm_module* m, xfm_sfx_id id, int priority)
     sfx.pending_note = -1;
     sfx.pending_patch_id = -1;
     sfx.active = true;
-    
+    sfx.auto_off_scheduled = false;
+    sfx.auto_off_at_sample = 0;
+
     // Update voice state
     m->voices[best_voice].active = true;
     m->voices[best_voice].priority = priority;
@@ -849,6 +863,13 @@ static void update_sfx_voice(xfm_module* m, int slot)
     
     // Advance sample counter
     sfx.sample_in_row++;
+
+    // Check for scheduled auto key-off
+    if (sfx.auto_off_scheduled && sfx.sample_in_row == sfx.auto_off_at_sample) {
+        m->chip->key_off(voice);
+        m->channel_active[voice] = false;
+        sfx.auto_off_scheduled = false;
+    }
 
     // Check if we've crossed the gap boundary - commit key-on
     if (sfx.pending_has_note) {
@@ -1232,6 +1253,20 @@ int xfm_song_get_total_rows(xfm_module* m, xfm_song_id id)
     return m->song_patterns[id].num_rows;
 }
 
+// Set automatic note-off delay
+void xfm_set_auto_off_delay(xfm_module* m, float delay)
+{
+    if (!m) return;
+    // Clamp to valid range [0.0, 1.0]
+    m->auto_off_delay = std::max(0.0f, std::min(1.0f, delay));
+}
+
+// Get automatic note-off delay
+float xfm_get_auto_off_delay(xfm_module* m)
+{
+    return m->auto_off_delay;
+}
+
 // =============================================================================
 // SONG PROCESSING
 // =============================================================================
@@ -1338,9 +1373,12 @@ static void update_song(xfm_module* m, int num_samples)
 
         song.sample_in_row++;
 
-        // At START of new row (sample 1), key off any active notes that have a new note pending
-        // This gives a full row of release time before the next note
-        if (song.sample_in_row == 1) {
+        // At configured position in row, key off active notes that have a new note pending
+        // This gives previous note time to play before release envelope starts
+        // Default delay is 0.3 (30% of row continues playing, 70% for release)
+        int off_sample = (int)(pat.samples_per_row * m->auto_off_delay);
+        if (off_sample < 1) off_sample = 1;  // Ensure at least sample 1
+        if (song.sample_in_row == off_sample) {
             for (int ch = 0; ch < 6; ch++) {
                 XfmSongChannel& ch_state = song.channels[ch];
                 // Key off if channel is active AND there's a new note waiting
