@@ -16,6 +16,7 @@ Traditional game audio loads `.wav` or `.ogg` files. eggsfm synthesizes everythi
 - **Dynamic audio** — Change pitch, timbre, and volume at runtime
 - **Unlimited voices** — Voice pooling handles concurrent sounds automatically
 - **Authentic sound** — Real YM2612/YM3438 emulation via [ymfm](https://github.com/aaronsgiles/ymfm)
+- **WAV fallback** — Pre-render to WAV for low-CPU platforms (optional)
 
 ## Quick Start
 
@@ -48,14 +49,14 @@ xfm_module* sfx   = xfm_module_create(44100, 256, XFM_CHIP_YM2612);
 void audio_callback(void* userdata, Uint8* stream, int len) {
     int16_t* buf = (int16_t*)stream;
     int frames = len / 4;
-    
-    // Mix music
-    xfm_mix(music, buf, frames);
-    
+
+    // Mix music (song only - optimized)
+    xfm_mix_song(music, buf, frames);
+
     // Mix SFX (additive mixing)
     int16_t sfx_buf[2048];
-    xfm_mix(sfx, sfx_buf, frames);
-    
+    xfm_mix_sfx(sfx, sfx_buf, frames);
+
     // Add SFX to output
     for (int i = 0; i < frames * 2; i++) {
         buf[i] = (int16_t)((int32_t)buf[i] + sfx_buf[i]);
@@ -83,7 +84,7 @@ Audio Output (int16_t stereo)
 ```
 
 **Timing:**
-- **Sample Rate:** 44100 Hz
+- **Sample Rate:** 44100 Hz (configurable)
 - **Buffer Size:** 256 frames (5.8 ms latency)
 - **Callback Rate:** ~172 times per second
 - **CPU Budget:** ~600 μs per callback
@@ -185,8 +186,54 @@ xfm_song_play(music_module, 1, 1);  // 1 = loop
 xfm_song_play(music_module, 2, 1);
 
 // Or schedule at next row boundary
-xfm_song_schedule(music_module, 2, XFM_SONG_SWITCH_STEP);
+xfm_song_schedule(music_module, 2, FM_SONG_SWITCH_STEP);
 ```
+
+## WAV Playback Mode (Low-CPU Alternative)
+
+For platforms that can't afford real-time synthesis, eggsfm provides a **WAV playback API** (`xfm_wavplay.h`) that mirrors the synthesis API:
+
+```cpp
+#include "xfm_wavplay.h"
+
+// Create WAV playback modules
+xfm_wav_module* music = xfm_wav_module_create(44100, 256);
+xfm_wav_module* sfx = xfm_wav_module_create(44100, 256);
+
+// Load pre-rendered WAV files
+xfm_wav_load_file(music, XFM_WAV_SONG, 1, "song_1.wav");
+xfm_wav_load_file(sfx, XFM_WAV_SFX, 0, "jump.wav");
+
+// Set volumes (same API as synthesis)
+xfm_wav_module_set_volume(music, 0.8f);
+xfm_wav_module_set_volume(sfx, 0.5f);
+
+// Play
+xfm_wav_song_play(music, 1, true);
+xfm_wav_sfx_play(sfx, 0, 5);
+
+// Mix in audio callback
+xfm_wav_mix_song(music, buffer, frames);
+xfm_wav_mix_sfx(sfx, sfx_buffer, frames);
+```
+
+**Export tools:**
+```cpp
+// Export synthesized songs/SFX to WAV
+xfm_export_song(module, 1, "song_1.wav");
+xfm_export_sfx(module, 0, "jump.wav");
+```
+
+## Music Production Pipeline
+
+![Music Production Pipeline](docs/process.svg)
+
+**Workflow:**
+1. **DAW** → Compose song structure
+2. **YM2612 Plugin** → Design FM instruments (Furnace format)
+3. **Furnace Tracker** → Import instruments, transcribe notes
+4. **Pattern Export** → ASCII format for eggsfm
+5. **inGameFm Library** → Parse and play in game
 
 ## Patch Format
 
@@ -210,7 +257,8 @@ typedef struct {
 typedef struct {
     uint8_t ALG;  // Algorithm:     0-7
     uint8_t FB;   // Feedback:      0-7
-    uint8_t LFO;  // LFO settings:  0-255
+    uint8_t AMS;  // AM Sensitivity: 0-3
+    uint8_t FMS;  // FM Sensitivity: 0-7
     xfm_patch_opn_operator op[4];
 } xfm_patch_opn;
 ```
@@ -224,29 +272,44 @@ typedef struct {
 
 ### Module Lifecycle
 ```cpp
+// Synthesis modules
 xfm_module* xfm_module_create(int sample_rate, int buffer_frames, XfmChipType chip);
 void xfm_module_destroy(xfm_module* m);
+
+// WAV playback modules
+xfm_wav_module* xfm_wav_module_create(int sample_rate, int buffer_frames);
+void xfm_wav_module_destroy(xfm_wav_module* m);
 ```
 
 ### Patches
 ```cpp
-void xfm_patch_set(xfm_module* m, int patch_id, const xfm_patch_opn* patch, 
+void xfm_patch_set(xfm_module* m, int patch_id, const xfm_patch_opn* patch,
                    int size, XfmChipType type);
 ```
 
 ### Sound Effects
 ```cpp
-void xfm_sfx_declare(xfm_module* m, int sfx_id, const char* pattern, 
+// Synthesis
+void xfm_sfx_declare(xfm_module* m, int sfx_id, const char* pattern,
                      int tick_rate, int speed);
 xfm_voice_id xfm_sfx_play(xfm_module* m, int sfx_id, int priority);
+
+// WAV playback
+int xfm_wav_load_file(xfm_wav_module* m, xfm_wav_type type, int id, const char* filename);
+xfm_wav_voice_id xfm_wav_sfx_play(xfm_wav_module* m, int sfx_id, int priority);
 ```
 
 ### Songs
 ```cpp
+// Synthesis
 void xfm_song_declare(xfm_module* m, int song_id, const char* pattern,
                       int tick_rate, int speed);
 void xfm_song_play(xfm_module* m, int song_id, int loop);
 void xfm_song_schedule(xfm_module* m, int song_id, XfmSongSwitch timing);
+
+// WAV playback
+int xfm_wav_load_file(xfm_wav_module* m, xfm_wav_type type, int id, const char* filename);
+void xfm_wav_song_play(xfm_wav_module* m, int song_id, int loop);
 ```
 
 ### Direct Notes
@@ -257,13 +320,31 @@ void xfm_note_off(xfm_module* m, xfm_voice_id voice);
 
 ### Audio Output
 ```cpp
+// Synthesis
 void xfm_mix(xfm_module* m, int16_t* stream, int frames);
+void xfm_mix_song(xfm_module* m, int16_t* stream, int frames);  // Song only
+void xfm_mix_sfx(xfm_module* m, int16_t* stream, int frames);   // SFX only
+
+// WAV playback
+void xfm_wav_mix(xfm_wav_module* m, int16_t* stream, int frames);
+void xfm_wav_mix_song(xfm_wav_module* m, int16_t* stream, int frames);
+void xfm_wav_mix_sfx(xfm_wav_module* m, int16_t* stream, int frames);
 ```
 
 ### Volume & LFO
 ```cpp
+// Synthesis
 void xfm_module_set_volume(xfm_module* m, float volume);  // 0.0 - 1.0
 void xfm_module_set_lfo(xfm_module* m, bool enable, int freq);
+
+// WAV playback
+void xfm_wav_module_set_volume(xfm_wav_module* m, float volume);
+```
+
+### Export Functions
+```cpp
+int xfm_export_song(xfm_module* m, xfm_song_id song_id, const char* filename);
+int xfm_export_sfx(xfm_module* m, int sfx_id, const char* filename);
 ```
 
 ## Dependencies
