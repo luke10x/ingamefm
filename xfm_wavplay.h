@@ -211,6 +211,25 @@ void xfm_wav_mix_sfx(xfm_wav_module* m, int16_t* stream, int frames);
  */
 void xfm_wav_mix(xfm_wav_module* m, int16_t* stream, int frames);
 
+/**
+ * @brief Set volume for WAV playback module.
+ *
+ * Works the same as xfm_module_set_volume() for synthesis modules.
+ * Use one module for music, another for SFX, and set volumes independently.
+ *
+ * @param m Module instance
+ * @param volume Volume level (0.0 = silent, 1.0 = full volume)
+ */
+void xfm_wav_module_set_volume(xfm_wav_module* m, float volume);
+
+/**
+ * @brief Get current volume for WAV playback module.
+ *
+ * @param m Module instance
+ * @return Current volume level (0.0 to 1.0)
+ */
+float xfm_wav_module_get_volume(xfm_wav_module* m);
+
 #ifdef __cplusplus
 }
 #endif

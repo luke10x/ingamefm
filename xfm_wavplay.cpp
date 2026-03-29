@@ -116,6 +116,9 @@ struct xfm_wav_module {
     int sample_rate;
     int buffer_frames;
     
+    // Volume control (same as xfm_module)
+    float volume;
+    
     // Song WAVs (1-15)
     XfmWavContent songs[16];
     bool song_present[16];
@@ -142,6 +145,7 @@ xfm_wav_module* xfm_wav_module_create(int sample_rate, int buffer_frames)
     
     m->sample_rate = sample_rate;
     m->buffer_frames = buffer_frames;
+    m->volume = 1.0f;
     
     // Initialize songs
     std::memset(m->songs, 0, sizeof(m->songs));
@@ -455,6 +459,7 @@ void xfm_wav_mix_song(xfm_wav_module* m, int16_t* stream, int frames)
     if (!song.data) return;
 
     int sample_pos = m->active_song.sample_pos;
+    float vol = m->volume;
 
     for (int i = 0; i < frames; i++) {
         if (sample_pos >= song.num_samples) {
@@ -469,9 +474,11 @@ void xfm_wav_mix_song(xfm_wav_module* m, int16_t* stream, int frames)
             }
         }
 
-        // Copy sample
-        stream[i * 2 + 0] = song.data[sample_pos * 2 + 0];
-        stream[i * 2 + 1] = song.data[sample_pos * 2 + 1];
+        // Copy sample with volume
+        int32_t left = (int32_t)song.data[sample_pos * 2 + 0];
+        int32_t right = (int32_t)song.data[sample_pos * 2 + 1];
+        stream[i * 2 + 0] = (int16_t)std::max(-32768, std::min(32767, (int32_t)(left * vol)));
+        stream[i * 2 + 1] = (int16_t)std::max(-32768, std::min(32767, (int32_t)(right * vol)));
         sample_pos++;
     }
 
@@ -493,6 +500,8 @@ void xfm_wav_mix_sfx(xfm_wav_module* m, int16_t* stream, int frames)
     // Don't clear buffer - song audio is already there!
     // We mix SFX on top of existing audio
 
+    float vol = m->volume;
+
     // Mix all active SFX
     for (int v = 0; v < 6; v++) {
         XfmWavActiveSfx& sfx = m->active_sfx[v];
@@ -513,9 +522,9 @@ void xfm_wav_mix_sfx(xfm_wav_module* m, int16_t* stream, int frames)
                 break;
             }
 
-            // Mix sample (with simple clipping)
-            int mixed_l = stream[i * 2 + 0] + content.data[sample_pos * 2 + 0];
-            int mixed_r = stream[i * 2 + 1] + content.data[sample_pos * 2 + 1];
+            // Mix sample with volume (with simple clipping)
+            int32_t mixed_l = stream[i * 2 + 0] + (int32_t)(content.data[sample_pos * 2 + 0] * vol);
+            int32_t mixed_r = stream[i * 2 + 1] + (int32_t)(content.data[sample_pos * 2 + 1] * vol);
 
             stream[i * 2 + 0] = (int16_t)std::max(-32768, std::min(32767, mixed_l));
             stream[i * 2 + 1] = (int16_t)std::max(-32768, std::min(32767, mixed_r));
@@ -530,10 +539,26 @@ void xfm_wav_mix_sfx(xfm_wav_module* m, int16_t* stream, int frames)
 void xfm_wav_mix(xfm_wav_module* m, int16_t* stream, int frames)
 {
     if (!m || !stream) return;
-    
+
     // Mix song
     xfm_wav_mix_song(m, stream, frames);
-    
+
     // Mix SFX on top
     xfm_wav_mix_sfx(m, stream, frames);
+}
+
+// =============================================================================
+// VOLUME CONTROL
+// =============================================================================
+
+void xfm_wav_module_set_volume(xfm_wav_module* m, float volume)
+{
+    if (!m) return;
+    m->volume = std::max(0.0f, std::min(1.0f, volume));
+}
+
+float xfm_wav_module_get_volume(xfm_wav_module* m)
+{
+    if (!m) return 1.0f;
+    return m->volume;
 }
