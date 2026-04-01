@@ -1,11 +1,9 @@
-<svg viewBox="0 0 1400 1100" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 1500 1200" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <!-- Arrow marker -->
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,6 L9,3 z" fill="#666"/>
     </marker>
     
-    <!-- Gradients -->
     <linearGradient id="sdlGrad" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" style="stop-color:#4a90d9;stop-opacity:1" />
       <stop offset="100%" style="stop-color:#357abd;stop-opacity:1" />
@@ -14,17 +12,21 @@
       <stop offset="0%" style="stop-color:#5cb85c;stop-opacity:1" />
       <stop offset="100%" style="stop-color:#449d44;stop-opacity:1" />
     </linearGradient>
-    <linearGradient id="songGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+    <linearGradient id="updateGrad" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" style="stop-color:#f0ad4e;stop-opacity:1" />
       <stop offset="100%" style="stop-color:#ec971f;stop-opacity:1" />
     </linearGradient>
-    <linearGradient id="sfxGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+    <linearGradient id="commitGrad" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" style="stop-color:#d9534f;stop-opacity:1" />
       <stop offset="100%" style="stop-color:#c9302c;stop-opacity:1" />
     </linearGradient>
     <linearGradient id="chipGrad" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" style="stop-color:#9b59b6;stop-opacity:1" />
       <stop offset="100%" style="stop-color:#8e44ad;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="ymfmGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#e74c3c;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#c0392b;stop-opacity:1" />
     </linearGradient>
     <linearGradient id="outGrad" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" style="stop-color:#1abc9c;stop-opacity:1" />
@@ -33,169 +35,222 @@
   </defs>
   
   <!-- Title -->
-  <text x="700" y="35" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" font-weight="bold" fill="#333">eggsfm Audio Callback Sequence Diagram</text>
+  <text x="750" y="35" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#333">eggsfm Audio Callback Sequence Diagram</text>
   
   <!-- Threading model warning -->
-  <rect x="250" y="50" width="900" height="50" rx="8" fill="#fff3cd" stroke="#ffc107" stroke-width="2"/>
-  <text x="700" y="72" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="bold" fill="#856404">⚠️ EMSCRIPTEN: All callbacks run on MAIN THREAD (not separate audio thread)</text>
-  <text x="700" y="92" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#856404">Native SDL has separate audio thread - Emscripten interleaves audio + rendering on same thread</text>
+  <rect x="300" y="50" width="900" height="50" rx="8" fill="#fff3cd" stroke="#ffc107" stroke-width="2"/>
+  <text x="750" y="72" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="bold" fill="#856404">⚠️ EMSCRIPTEN: All callbacks run on MAIN THREAD (not separate audio thread)</text>
+  <text x="750" y="92" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#856404">Native SDL has separate audio thread - Emscripten interleaves audio + rendering on same thread</text>
   
   <!-- Lifelines -->
-  <line x1="150" y1="140" x2="150" y2="1050" stroke="#4a90d9" stroke-width="2" stroke-dasharray="5,5"/>
-  <line x1="350" y1="140" x2="350" y2="1050" stroke="#5cb85c" stroke-width="2" stroke-dasharray="5,5"/>
-  <line x1="550" y1="140" x2="550" y2="1050" stroke="#f0ad4e" stroke-width="2" stroke-dasharray="5,5"/>
-  <line x1="750" y1="140" x2="750" y2="1050" stroke="#d9534f" stroke-width="2" stroke-dasharray="5,5"/>
-  <line x1="950" y1="140" x2="950" y2="1050" stroke="#9b59b6" stroke-width="2" stroke-dasharray="5,5"/>
-  <line x1="1150" y1="140" x2="1150" y2="1050" stroke="#1abc9c" stroke-width="2" stroke-dasharray="5,5"/>
+  <line x1="100" y1="140" x2="100" y2="1150" stroke="#4a90d9" stroke-width="2" stroke-dasharray="5,5"/>
+  <line x1="250" y1="140" x2="250" y2="1150" stroke="#5cb85c" stroke-width="2" stroke-dasharray="5,5"/>
+  <line x1="400" y1="140" x2="400" y2="1150" stroke="#f0ad4e" stroke-width="2" stroke-dasharray="5,5"/>
+  <line x1="550" y1="140" x2="550" y2="1150" stroke="#d9534f" stroke-width="2" stroke-dasharray="5,5"/>
+  <line x1="700" y1="140" x2="700" y2="1150" stroke="#9b59b6" stroke-width="2" stroke-dasharray="5,5"/>
+  <line x1="900" y1="140" x2="900" y2="1150" stroke="#e74c3c" stroke-width="2" stroke-dasharray="5,5"/>
+  <line x1="1100" y1="140" x2="1100" y2="1150" stroke="#1abc9c" stroke-width="2" stroke-dasharray="5,5"/>
   
   <!-- Participant boxes -->
-  <rect x="50" y="140" width="200" height="50" rx="8" fill="url(#sdlGrad)" stroke="#2c5aa0" stroke-width="2"/>
-  <text x="150" y="162" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white">SDL Audio System</text>
-  <text x="150" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">(Browser Audio Clock)</text>
+  <rect x="20" y="140" width="160" height="50" rx="8" fill="url(#sdlGrad)" stroke="#2c5aa0" stroke-width="2"/>
+  <text x="100" y="162" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white">SDL Audio Callback</text>
+  <text x="100" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">(Your Game Code)</text>
   
-  <rect x="250" y="140" width="200" height="50" rx="8" fill="url(#mixGrad)" stroke="#3d8b3d" stroke-width="2"/>
-  <text x="350" y="162" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white">sdl_audio_callback()</text>
-  <text x="350" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">(Your Code - MAIN THREAD)</text>
+  <rect x="170" y="140" width="160" height="50" rx="8" fill="url(#mixGrad)" stroke="#3d8b3d" stroke-width="2"/>
+  <text x="250" y="162" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white">xfm_mix_song()</text>
+  <text x="250" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">(xfm_impl.cpp)</text>
   
-  <rect x="450" y="140" width="200" height="50" rx="8" fill="url(#songGrad)" stroke="#c77c11" stroke-width="2"/>
-  <text x="550" y="162" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white">update_song()</text>
-  <text x="550" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">(Song Processing)</text>
+  <rect x="320" y="140" width="160" height="50" rx="8" fill="url(#updateGrad)" stroke="#c77c11" stroke-width="2"/>
+  <text x="400" y="162" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white">update_song()</text>
+  <text x="400" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">(Song State Machine)</text>
   
-  <rect x="650" y="140" width="200" height="50" rx="8" fill="url(#sfxGrad)" stroke="#a02622" stroke-width="2"/>
-  <text x="750" y="162" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white">update_sfx()</text>
-  <text x="750" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">(SFX Processing)</text>
+  <rect x="470" y="140" width="160" height="50" rx="8" fill="url(#commitGrad)" stroke="#a02622" stroke-width="2"/>
+  <text x="550" y="162" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white">song_commit_keyon()</text>
+  <text x="550" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">(Note Trigger)</text>
   
-  <rect x="850" y="140" width="200" height="50" rx="8" fill="url(#chipGrad)" stroke="#6c3483" stroke-width="2"/>
-  <text x="950" y="162" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white">chip-&gt;generate_buffer()</text>
-  <text x="950" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">(YMFM Synthesis)</text>
+  <rect x="620" y="140" width="160" height="50" rx="8" fill="url(#chipGrad)" stroke="#6c3483" stroke-width="2"/>
+  <text x="700" y="162" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white">XfmChipOpn</text>
+  <text x="700" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">(Wrapper Class)</text>
   
-  <rect x="1050" y="140" width="200" height="50" rx="8" fill="url(#outGrad)" stroke="#117a65" stroke-width="2"/>
-  <text x="1150" y="162" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white">Audio Output</text>
-  <text x="1150" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">(Web Audio API)</text>
+  <rect x="820" y="140" width="160" height="50" rx="8" fill="url(#ymfmGrad)" stroke="#a93226" stroke-width="2"/>
+  <text x="900" y="162" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white">ymfm::ym2612</text>
+  <text x="900" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">(FM Synthesis)</text>
+  
+  <rect x="1020" y="140" width="160" height="50" rx="8" fill="url(#outGrad)" stroke="#117a65" stroke-width="2"/>
+  <text x="1100" y="162" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white">Audio Output</text>
+  <text x="1100" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">(SDL/Web Audio)</text>
   
   <!-- Activation boxes -->
-  <rect x="340" y="220" width="20" height="750" fill="#5cb85c" stroke="#3d8b3d" stroke-width="2"/>
-  <rect x="540" y="280" width="20" height="120" fill="#f0ad4e" stroke="#c77c11" stroke-width="2"/>
-  <rect x="740" y="420" width="20" height="120" fill="#d9534f" stroke="#a02622" stroke-width="2"/>
-  <rect x="940" y="560" width="20" height="200" fill="#9b59b6" stroke="#6c3483" stroke-width="2"/>
+  <rect x="240" y="220" width="20" height="850" fill="#5cb85c" stroke="#3d8b3d" stroke-width="2"/>
+  <rect x="390" y="280" width="20" height="200" fill="#f0ad4e" stroke="#c77c11" stroke-width="2"/>
+  <rect x="540" y="500" width="20" height="80" fill="#d9534f" stroke="#a02622" stroke-width="2"/>
+  <rect x="690" y="600" width="20" height="150" fill="#9b59b6" stroke="#6c3483" stroke-width="2"/>
+  <rect x="890" y="770" width="20" height="180" fill="#e74c3c" stroke="#a93226" stroke-width="2"/>
   
   <!-- Sequence messages -->
   <!-- 1. SDL triggers callback -->
-  <line x1="150" y1="230" x2="340" y2="230" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="245" y="225" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">1. Trigger Callback</text>
-  <text x="245" y="245" text-anchor="middle" font-family="Courier New, monospace" font-size="9" fill="#888">every 5.8ms (172 Hz)</text>
+  <line x1="100" y1="230" x2="240" y2="230" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="170" y="225" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">1. SDL Audio Callback</text>
+  <text x="170" y="245" text-anchor="middle" font-family="Courier New, monospace" font-size="9" fill="#888">every 5.8ms (172 Hz)</text>
   
-  <!-- 2. Clear buffer -->
-  <rect x="360" y="250" width="160" height="30" rx="5" fill="#e8f5e9" stroke="#4caf50" stroke-width="1"/>
-  <text x="440" y="270" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#2e7d32">memset(buffer, 0)</text>
+  <!-- 2. Call xfm_mix_song -->
+  <rect x="260" y="250" width="120" height="30" rx="5" fill="#e8f5e9" stroke="#4caf50" stroke-width="1"/>
+  <text x="320" y="270" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#2e7d32">Clear buffer</text>
   
-  <!-- 3. Call update_song -->
-  <line x1="360" y1="290" x2="540" y2="290" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="450" y="285" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">2. update_song(m, frames)</text>
+  <line x1="260" y1="290" x2="390" y2="290" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="325" y="285" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">2. update_song(m, frames)</text>
   
-  <!-- Song processing details -->
-  <rect x="560" y="300" width="180" height="80" rx="5" fill="#fff3e0" stroke="#ff9800" stroke-width="1"/>
-  <text x="650" y="320" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#e65100">For each sample:</text>
-  <text x="570" y="340" font-family="Courier New, monospace" font-size="9" fill="#e65100">• sample_in_row++</text>
-  <text x="570" y="355" font-family="Courier New, monospace" font-size="9" fill="#e65100">• song_commit_keyon()</text>
-  <text x="570" y="370" font-family="Courier New, monospace" font-size="9" fill="#e65100">• Check row end</text>
+  <!-- Song processing loop -->
+  <rect x="410" y="300" width="180" height="160" rx="5" fill="#fff3e0" stroke="#ff9800" stroke-width="1"/>
+  <text x="500" y="320" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#e65100">For each sample (frames times):</text>
+  <text x="420" y="345" font-family="Courier New, monospace" font-size="9" fill="#e65100">• song.sample_in_row++</text>
+  <text x="420" y="360" font-family="Courier New, monospace" font-size="9" fill="#e65100">• Check auto_off_delay</text>
+  <text x="420" y="375" font-family="Courier New, monospace" font-size="9" fill="#e65100">  if (sample_in_row == off_sample)</text>
+  <text x="430" y="390" font-family="Courier New, monospace" font-size="9" fill="#e65100">  → chip-&gt;key_off(ch)</text>
+  <text x="420" y="410" font-family="Courier New, monospace" font-size="9" fill="#e65100">• song_commit_keyon()</text>
+  <text x="420" y="425" font-family="Courier New, monospace" font-size="9" fill="#e65100">• Check row end:</text>
+  <text x="430" y="440" font-family="Courier New, monospace" font-size="9" fill="#e65100">  if (sample_in_row &gt;= samples_per_row)</text>
+  <text x="440" y="455" font-family="Courier New, monospace" font-size="9" fill="#e65100">  → song_process_row()</text>
   
-  <!-- 4. Return from update_song -->
-  <line x1="540" y1="400" x2="360" y2="400" stroke="#666" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#arrow)"/>
+  <!-- Auto key-off detail -->
+  <line x1="410" y1="365" x2="540" y2="365" stroke="#666" stroke-width="1" stroke-dasharray="3,3"/>
+  <rect x="560" y="350" width="140" height="50" rx="5" fill="#ffebee" stroke="#f44336" stroke-width="1"/>
+  <text x="630" y="370" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#c62828">Auto Key-Off</text>
+  <text x="570" y="390" font-family="Courier New, monospace" font-size="9" fill="#c62828">At sample = row_len × 0.3</text>
   
-  <!-- 5. Call update_sfx -->
-  <line x1="360" y1="430" x2="740" y2="430" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="550" y="425" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">3. update_sfx(m, frames)</text>
+  <!-- 3. Call song_commit_keyon -->
+  <line x1="410" y1="510" x2="540" y2="510" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="475" y="505" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">3. song_commit_keyon(gap)</text>
   
-  <!-- SFX processing details -->
-  <rect x="760" y="440" width="180" height="80" rx="5" fill="#ffebee" stroke="#f44336" stroke-width="1"/>
-  <text x="850" y="460" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#c62828">For each sample:</text>
-  <text x="770" y="480" font-family="Courier New, monospace" font-size="9" fill="#c62828">• For each slot (0-5):</text>
-  <text x="770" y="495" font-family="Courier New, monospace" font-size="9" fill="#c62828">  update_sfx_voice()</text>
-  <text x="770" y="510" font-family="Courier New, monospace" font-size="9" fill="#c62828">• sfx_commit_keyon()</text>
+  <!-- song_commit_keyon logic -->
+  <rect x="560" y="520" width="160" height="100" rx="5" fill="#ffebee" stroke="#d32f2f" stroke-width="1"/>
+  <text x="640" y="540" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#c62828">Check pending notes:</text>
+  <text x="570" y="565" font-family="Courier New, monospace" font-size="9" fill="#c62828">if (current_gap &gt;= pending_gap)</text>
+  <text x="570" y="580" font-family="Courier New, monospace" font-size="9" fill="#c62828">  → Load patch</text>
+  <text x="570" y="595" font-family="Courier New, monospace" font-size="9" fill="#c62828">  → Set frequency</text>
+  <text x="570" y="610" font-family="Courier New, monospace" font-size="9" fill="#c62828">  → chip-&gt;key_on(ch)</text>
   
-  <!-- 6. Return from update_sfx -->
-  <line x1="740" y1="540" x2="360" y2="540" stroke="#666" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#arrow)"/>
+  <!-- 4. Call chip methods -->
+  <line x1="560" y1="610" x2="690" y2="610" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="625" y="605" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">4a. chip-&gt;load_patch()</text>
   
-  <!-- 7. Call generate_buffer -->
-  <line x1="360" y1="570" x2="940" y2="570" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="650" y="565" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">4. generate_buffer(stream, frames, sample_rate)</text>
+  <line x1="560" y1="635" x2="690" y2="635" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="625" y="630" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">4b. chip-&gt;set_frequency()</text>
   
-  <!-- FM synthesis details -->
-  <rect x="960" y="580" width="200" height="160" rx="5" fill="#f3e5f5" stroke="#9c27b0" stroke-width="1"/>
-  <text x="1060" y="600" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#6a1b9a">For each voice (0-5):</text>
-  <text x="970" y="620" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">• if active:</text>
-  <text x="980" y="635" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">  - Phase calculation</text>
-  <text x="980" y="650" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">  - Operator modulation</text>
-  <text x="980" y="665" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">  - Envelope (EG)</text>
-  <text x="980" y="680" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">  - Algorithm routing</text>
-  <text x="970" y="705" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">• Mix to stereo output</text>
-  <text x="970" y="720" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">• Apply volume</text>
-  <text x="970" y="735" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">• Write to stream</text>
+  <line x1="560" y1="660" x2="690" y2="660" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="625" y="655" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">4c. chip-&gt;key_on(ch)</text>
+  
+  <!-- Chip wrapper calls YMFM -->
+  <rect x="710" y="600" width="170" height="120" rx="5" fill="#f3e5f5" stroke="#7b1fa2" stroke-width="1"/>
+  <text x="795" y="620" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#6a1b9a">XfmChipOpn Wrapper:</text>
+  <text x="720" y="645" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">load_patch():</text>
+  <text x="730" y="660" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">  → Write TL, AR, DR, etc.</text>
+  <text x="720" y="680" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">set_frequency():</text>
+  <text x="730" y="695" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">  → Calculate FNUM/BLOCK</text>
+  <text x="720" y="715" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">key_on():</text>
+  <text x="730" y="730" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">  → Write to register 0x28</text>
+  
+  <!-- 5. Return from update_song -->
+  <line x1="390" y1="760" x2="260" y2="760" stroke="#666" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#arrow)"/>
+  <text x="325" y="755" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">5. Return (song updated)</text>
+  
+  <!-- 6. Call generate_buffer -->
+  <line x1="260" y1="780" x2="690" y2="780" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="475" y="775" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">6. chip-&gt;generate_buffer(stream, frames, sample_rate)</text>
+  
+  <!-- Bresenham resampling -->
+  <rect x="710" y="790" width="170" height="140" rx="5" fill="#f3e5f5" stroke="#7b1fa2" stroke-width="1"/>
+  <text x="795" y="810" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#6a1b9a">Bresenham Resampling:</text>
+  <text x="720" y="835" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">REF_RATE = chip.sample_rate()</text>
+  <text x="720" y="850" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">acc_err = 0</text>
+  <text x="720" y="870" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">for each output sample:</text>
+  <text x="730" y="885" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">do {</text>
+  <text x="740" y="900" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">  chip.generate(&amp;L, &amp;R)</text>
+  <text x="740" y="915" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">  acc_err += sample_rate</text>
+  <text x="730" y="930" font-family="Courier New, monospace" font-size="9" fill="#6a1b9a">} while (acc_err &lt; REF_RATE)</text>
+  
+  <!-- 7. Call YMFM generate -->
+  <line x1="710" y1="900" x2="890" y2="900" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="800" y="895" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">7. ym2612::generate(&amp;L, &amp;R)</text>
+  
+  <!-- YMFM FM synthesis -->
+  <rect x="910" y="770" width="170" height="200" rx="5" fill="#ffebee" stroke="#c62828" stroke-width="1"/>
+  <text x="995" y="790" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#c62828">YMFM FM Synthesis:</text>
+  <text x="920" y="815" font-family="Courier New, monospace" font-size="9" fill="#c62828">For each of 6 channels:</text>
+  <text x="930" y="830" font-family="Courier New, monospace" font-size="9" fill="#c62828">• Phase calculation</text>
+  <text x="930" y="845" font-family="Courier New, monospace" font-size="9" fill="#c62828">• Operator modulation</text>
+  <text x="930" y="860" font-family="Courier New, monospace" font-size="9" fill="#c62828">• Envelope (AR→DR→SR→RR)</text>
+  <text x="930" y="875" font-family="Courier New, monospace" font-size="9" fill="#c62828">• Algorithm routing</text>
+  <text x="930" y="890" font-family="Courier New, monospace" font-size="9" fill="#c62828">• Mix operators</text>
+  <text x="920" y="915" font-family="Courier New, monospace" font-size="9" fill="#c62828">For each of 2 outputs:</text>
+  <text x="930" y="930" font-family="Courier New, monospace" font-size="9" fill="#c62828">• Apply volume</text>
+  <text x="930" y="945" font-family="Courier New, monospace" font-size="9" fill="#c62828">• Write L, R</text>
+  <text x="920" y="970" font-family="Courier New, monospace" font-size="9" fill="#c62828">~53267 Hz internal rate</text>
   
   <!-- 8. Return from generate_buffer -->
-  <line x1="940" y1="760" x2="360" y2="760" stroke="#666" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#arrow)"/>
+  <line x1="690" y1="990" x2="260" y2="990" stroke="#666" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#arrow)"/>
+  <text x="475" y="985" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">8. Return (buffer filled)</text>
+  
+  <!-- Apply volume -->
+  <rect x="260" y="1010" width="120" height="30" rx="5" fill="#e8f5e9" stroke="#4caf50" stroke-width="1"/>
+  <text x="320" y="1030" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#2e7d32">Apply m-&gt;volume</text>
   
   <!-- 9. Return to SDL -->
-  <line x1="340" y1="790" x2="150" y2="790" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="245" y="785" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">5. Return (buffer filled)</text>
+  <line x1="240" y1="1050" x2="100" y2="1050" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="170" y="1045" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">9. Return to SDL</text>
   
-  <!-- 10. SDL outputs to hardware -->
-  <line x1="150" y1="820" x2="1150" y2="820" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="650" y="815" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">6. Send to Audio Hardware (Web Audio API → Speakers)</text>
+  <!-- 10. SDL outputs -->
+  <line x1="100" y1="1080" x2="1100" y2="1080" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="600" y="1075" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">10. SDL → Audio Hardware (Web Audio API → Speakers)</text>
   
   <!-- Timing info box -->
-  <rect x="20" y="870" width="300" height="160" rx="8" fill="#f8f9fa" stroke="#dee2e6" stroke-width="2"/>
-  <text x="170" y="895" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333">⏱️ Timing Breakdown</text>
-  
-  <text x="40" y="920" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#333">Per Callback:</text>
-  <text x="40" y="940" font-family="Courier New, monospace" font-size="11" fill="#555">Buffer: 256 frames</text>
-  <text x="40" y="960" font-family="Courier New, monospace" font-size="11" fill="#555">Time Budget: 5.8 ms</text>
-  <text x="40" y="980" font-family="Courier New, monospace" font-size="11" fill="#555">Rate: 172 Hz</text>
-  <text x="40" y="1000" font-family="Courier New, monospace" font-size="11" fill="#c62828" font-weight="bold">EMSCRIPTEN: &lt;1ms target!</text>
-  
-  <text x="40" y="1025" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#333">CPU Budget (typical):</text>
-  <text x="40" y="1045" font-family="Courier New, monospace" font-size="10" fill="#555">update_song: ~50-100 μs</text>
-  <text x="40" y="1065" font-family="Courier New, monospace" font-size="10" fill="#555">update_sfx: ~50-100 μs</text>
-  <text x="40" y="1085" font-family="Courier New, monospace" font-size="10" fill="#555">generate_buffer: ~200-400 μs</text>
-  
-  <!-- Parameters box -->
-  <rect x="1080" y="870" width="300" height="160" rx="8" fill="#e3f2fd" stroke="#90caf9" stroke-width="2"/>
-  <text x="1230" y="895" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#1565c0">📦 Callback Parameters</text>
-  
-  <text x="1100" y="920" font-family="Courier New, monospace" font-size="11" fill="#1565c0">void* userdata</text>
-  <text x="1110" y="940" font-family="Arial, sans-serif" font-size="10" fill="#555">→ AppState* (your data)</text>
-  
-  <text x="1100" y="965" font-family="Courier New, monospace" font-size="11" fill="#1565c0">Uint8* stream</text>
-  <text x="1110" y="985" font-family="Arial, sans-serif" font-size="10" fill="#555">→ Output buffer (int16_t*)</text>
-  
-  <text x="1100" y="1010" font-family="Courier New, monospace" font-size="11" fill="#1565c0">int len</text>
-  <text x="1110" y="1030" font-family="Arial, sans-serif" font-size="10" fill="#555">→ Bytes to fill (1024 = 256×4)</text>
+  <rect x="20" y="1120" width="320" height="70" rx="8" fill="#f8f9fa" stroke="#dee2e6" stroke-width="2"/>
+  <text x="180" y="1140" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="bold" fill="#333">⏱️ Timing (256 frames @ 44100 Hz)</text>
+  <text x="40" y="1160" font-family="Courier New, monospace" font-size="10" fill="#555">update_song: ~50-100 μs</text>
+  <text x="40" y="1175" font-family="Courier New, monospace" font-size="10" fill="#555">generate_buffer: ~200-400 μs</text>
+  <text x="40" y="1190" font-family="Courier New, monospace" font-size="10" fill="#c62828" font-weight="bold">Total: ~600 μs (budget: 5800 μs)</text>
   
   <!-- Key events box -->
-  <rect x="340" y="870" width="420" height="160" rx="8" fill="#fff3e0" stroke="#ffb74d" stroke-width="2"/>
-  <text x="550" y="895" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#e65100">🎵 Note Trigger Events</text>
+  <rect x="1200" y="220" width="280" height="200" rx="8" fill="#fff3e0" stroke="#ffb74d" stroke-width="2"/>
+  <text x="1340" y="245" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#e65100">🎵 Note Trigger Events</text>
   
-  <text x="360" y="920" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#e65100">Song (update_song):</text>
-  <text x="370" y="940" font-family="Courier New, monospace" font-size="10" fill="#e65100">• At row boundary (sample_in_row ≥ samples_per_row)</text>
-  <text x="370" y="958" font-family="Courier New, monospace" font-size="10" fill="#e65100">• After gap samples elapsed</text>
-  <text x="370" y="976" font-family="Courier New, monospace" font-size="10" fill="#e65100">• Calls: chip-&gt;key_on(voice)</text>
+  <text x="1220" y="270" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#e65100">Song (update_song):</text>
+  <text x="1230" y="290" font-family="Courier New, monospace" font-size="10" fill="#e65100">• Auto key-off at 30% of row</text>
+  <text x="1230" y="308" font-family="Courier New, monospace" font-size="10" fill="#e65100">• song_commit_keyon() after gap</text>
+  <text x="1230" y="326" font-family="Courier New, monospace" font-size="10" fill="#e65100">• Row boundary: song_process_row()</text>
   
-  <text x="360" y="1000" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#e65100">SFX (update_sfx):</text>
-  <text x="370" y="1020" font-family="Courier New, monospace" font-size="10" fill="#e65100">• Dynamic gap (distance-based)</text>
-  <text x="370" y="1038" font-family="Courier New, monospace" font-size="10" fill="#e65100">• Calls: chip-&gt;key_on(voice) / chip-&gt;key_off(voice)</text>
+  <text x="1220" y="355" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#e65100">Gap Formula:</text>
+  <text x="1230" y="375" font-family="Courier New, monospace" font-size="10" fill="#e65100">gap = min_gap + (rows × 0.4 × samples_per_row)</text>
+  <text x="1230" y="393" font-family="Courier New, monospace" font-size="10" fill="#e65100">min_gap = 250 × sample_rate / 44100</text>
+  <text x="1230" y="411" font-family="Courier New, monospace" font-size="10" fill="#e65100">max_gap = 250 × sample_rate / 44100</text>
   
-  <!-- Threading comparison box -->
-  <rect x="780" y="870" width="280" height="160" rx="8" fill="#ffebee" stroke="#ef9a9a" stroke-width="2"/>
-  <text x="920" y="895" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#c62828">🧵 Threading Models</text>
+  <!-- State variables box -->
+  <rect x="1200" y="440" width="280" height="180" rx="8" fill="#e3f2fd" stroke="#90caf9" stroke-width="2"/>
+  <text x="1340" y="465" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#1565c0">📦 Song State (XfmActiveSong)</text>
   
-  <text x="800" y="920" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#c62828">Native SDL:</text>
-  <text x="810" y="940" font-family="Arial, sans-serif" font-size="10" fill="#555">• Audio: Separate thread (172 Hz)</text>
-  <text x="810" y="958" font-family="Arial, sans-serif" font-size="10" fill="#555">• Video: Main thread (30-60 FPS)</text>
-  <text x="810" y="976" font-family="Arial, sans-serif" font-size="10" fill="#555">• Independent, no blocking</text>
+  <text x="1220" y="490" font-family="Courier New, monospace" font-size="10" fill="#1565c0">song_id</text>
+  <text x="1230" y="508" font-family="Arial, sans-serif" font-size="9" fill="#555">Current song (1-15)</text>
   
-  <text x="800" y="1000" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#c62828">Emscripten:</text>
-  <text x="810" y="1020" font-family="Arial, sans-serif" font-size="10" fill="#555">• Audio: MAIN thread (172 Hz)</text>
-  <text x="810" y="1038" font-family="Arial, sans-serif" font-size="10" fill="#555">• Video: MAIN thread (30-60 FPS)</text>
-  <text x="810" y="1056" font-family="Arial, sans-serif" font-size="10" fill="#c62828" font-weight="bold">• INTERLEAVED - audio blocks render!</text>
+  <text x="1220" y="530" font-family="Courier New, monospace" font-size="10" fill="#1565c0">current_row</text>
+  <text x="1230" y="548" font-family="Arial, sans-serif" font-size="9" fill="#555">Row index (0 to num_rows-1)</text>
+  
+  <text x="1220" y="570" font-family="Courier New, monospace" font-size="10" fill="#1565c0">sample_in_row</text>
+  <text x="1230" y="588" font-family="Arial, sans-serif" font-size="9" fill="#555">Sample position (0 to samples_per_row-1)</text>
+  
+  <text x="1220" y="610" font-family="Courier New, monospace" font-size="10" fill="#1565c0">active</text>
+  <text x="1230" y="628" font-family="Arial, sans-serif" font-size="9" fill="#555">Song is playing</text>
+  
+  <!-- YMFM details box -->
+  <rect x="1200" y="640" width="280" height="180" rx="8" fill="#ffebee" stroke="#ef9a9a" stroke-width="2"/>
+  <text x="1340" y="665" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#c62828">🎹 YM2612 Details</text>
+  
+  <text x="1220" y="690" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#c62828">Internal Clock:</text>
+  <text x="1230" y="710" font-family="Courier New, monospace" font-size="10" fill="#555">7670453 Hz / 144 = ~53267 Hz</text>
+  
+  <text x="1220" y="735" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#c62828">Operators:</text>
+  <text x="1230" y="755" font-family="Courier New, monospace" font-size="10" fill="#555">4 operators per channel</text>
+  <text x="1230" y="773" font-family="Courier New, monospace" font-size="10" fill="#555">8 algorithms (routing patterns)</text>
+  
+  <text x="1220" y="798" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#c62828">Envelope:</text>
+  <text x="1230" y="818" font-family="Courier New, monospace" font-size="10" fill="#555">AR (0-31) → DR (0-31) → SR/SL → RR (0-15)</text>
 </svg>

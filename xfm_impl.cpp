@@ -1563,7 +1563,7 @@ void xfm_note_off(xfm_module* m, xfm_voice_id v)
  */
 void xfm_mix_song(xfm_module* m, int16_t* stream, int frames)
 {
-    if (!m || !m->chip) {
+    if (!m || !m->chip || m->volume < 0.01f) {
         std::memset(stream, 0, frames * 2 * sizeof(int16_t));
         return;
     }
@@ -1595,7 +1595,7 @@ void xfm_mix_song(xfm_module* m, int16_t* stream, int frames)
  */
 void xfm_mix_sfx(xfm_module* m, int16_t* stream, int frames)
 {
-    if (!m || !m->chip) {
+    if (!m || !m->chip || m->volume < 0.01f) {
         std::memset(stream, 0, frames * 2 * sizeof(int16_t));
         return;
     }

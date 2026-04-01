@@ -84,7 +84,7 @@
      x="396.55783"
      y="33.29232"
      class="title"
-     id="text1">inGameFm Music Pipeline</text>
+     id="text1">eggsfm Music Pipeline</text>
   <!-- DAW -->
   <rect
      x="50.816727"
@@ -120,7 +120,7 @@
      x="425.81503"
      y="86.985085"
      class="text title"
-     id="text5">YM2612 Plugin</text>
+     id="text5">eggsfm Plugin</text>
   <text
      x="425.81503"
      y="111.98509"
@@ -153,7 +153,7 @@
      x="848.79498"
      y="111.31173"
      class="text small"
-     id="text10">C++ YM2612 structs</text>
+     id="text10">C++ eggsfm structs</text>
   <text
      x="848.79498"
      y="126.31173"
@@ -234,7 +234,7 @@
      x="798.1145"
      y="418.20285"
      class="text title"
-     id="text20">inGameFm Library</text>
+     id="text20">eggsfm Library</text>
   <text
      x="798.1145"
      y="443.20285"
