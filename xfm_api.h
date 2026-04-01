@@ -294,7 +294,7 @@ void xfm_song_play(xfm_module* m, xfm_song_id id, bool loop);
  */
 typedef enum {
     FM_SONG_SWITCH_NOW = 0,     /* Switch immediately */
-    FM_SONG_SWITCH_STEP,         /* Switch at next row */
+    FM_SONG_SWITCH_ROW,         /* Switch at next row */
     FM_SONG_SWITCH_LOOP          /* Switch at next loop point */
 } xfm_song_switch_timing;
 

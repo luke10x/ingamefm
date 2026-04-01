@@ -484,9 +484,9 @@ void xfm_wav_mix_song(xfm_wav_module* m, int16_t* stream, int frames)
 
     m->active_song.sample_pos = sample_pos;
 
-    // Check for pending song change (STEP timing)
+    // Check for pending song change (ROW timing)
     if (m->active_song.pending_set &&
-        m->active_song.pending_timing == XFM_WAV_SWITCH_STEP) {
+        m->active_song.pending_timing == XFM_WAV_SWITCH_ROW) {
         m->active_song.song_id = m->active_song.pending_song_id;
         m->active_song.sample_pos = 0;
         m->active_song.pending_set = false;

@@ -62,7 +62,7 @@ typedef int xfm_wav_voice_id;
  */
 typedef enum {
     XFM_WAV_SWITCH_NOW = 0,   // Switch immediately
-    XFM_WAV_SWITCH_STEP = 1,  // Switch at next row
+    XFM_WAV_SWITCH_ROW = 1,  // Switch at next row
     XFM_WAV_SWITCH_LOOP = 2   // Switch at next loop point
 } xfm_wav_switch_timing;
 
@@ -130,7 +130,7 @@ void xfm_wav_song_play(xfm_wav_module* m, int song_id, bool loop);
  *
  * @param m Module instance
  * @param song_id Song ID to switch to (1-15)
- * @param timing When to switch (NOW, STEP, or LOOP)
+ * @param timing When to switch (NOW, ROW, or LOOP)
  */
 void xfm_wav_song_schedule(xfm_wav_module* m, int song_id, xfm_wav_switch_timing timing);
 

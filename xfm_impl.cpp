@@ -216,14 +216,14 @@ struct XfmActiveSfx {
     int     voice_idx;      // which voice it's using
     int     current_row;    // current row in pattern
     int     sample_in_row;  // current sample within row
-    int     ticks_remaining; // rows remaining (for duration tracking)
+    int     rows_remaining; // rows remaining (for duration tracking)
     int     last_patch_id;  // last instrument used
     int     pending_gap;    // gap samples before key-on (dynamic)
     bool    pending_has_note; // note waiting to be committed
     int     pending_note;   // pending MIDI note
     int     pending_patch_id; // pending patch
     bool    active;         // is currently playing
-    
+
     // Automatic note-off scheduling
     bool    auto_off_scheduled;
     int     auto_off_at_sample;
@@ -267,7 +267,7 @@ struct XfmActiveSong {
     int             song_id;
     int             current_row;
     int             sample_in_row;
-    int             ticks_remaining;  // for loop tracking
+    int             rows_remaining;  // for loop tracking
     bool            active;
     bool            loop;
     XfmSongChannel   channels[6];
@@ -389,7 +389,7 @@ xfm_module* xfm_module_create(int sample_rate, int buffer_frames, xfm_chip_type 
         m->active_sfx[i].voice_idx = -1;
         m->active_sfx[i].current_row = 0;
         m->active_sfx[i].sample_in_row = get_min_gap_samples(m->sample_rate);
-        m->active_sfx[i].ticks_remaining = 0;
+        m->active_sfx[i].rows_remaining = 0;
         m->active_sfx[i].last_patch_id = -1;
         m->active_sfx[i].pending_has_note = false;
         m->active_sfx[i].pending_note = -1;
@@ -408,7 +408,7 @@ xfm_module* xfm_module_create(int sample_rate, int buffer_frames, xfm_chip_type 
     m->active_song.song_id = 0;
     m->active_song.current_row = 0;
     m->active_song.sample_in_row = 0;
-    m->active_song.ticks_remaining = 0;
+    m->active_song.rows_remaining = 0;
     m->active_song.active = false;
     m->active_song.loop = false;
     for (int ch = 0; ch < 6; ch++) {
@@ -819,7 +819,7 @@ xfm_voice_id xfm_sfx_play(xfm_module* m, xfm_sfx_id id, int priority)
     sfx.voice_idx = best_voice;
     sfx.current_row = 0;
     sfx.sample_in_row = get_min_gap_samples(m->sample_rate);  // Start after gap
-    sfx.ticks_remaining = pat.num_rows;
+    sfx.rows_remaining = pat.num_rows;
     sfx.last_patch_id = -1;
     sfx.pending_has_note = false;
     sfx.pending_note = -1;
@@ -855,12 +855,12 @@ static void update_sfx_voice(xfm_module* m, int slot)
 {
     XfmActiveSfx& sfx = m->active_sfx[slot];
     if (!sfx.active) return;
-    if (sfx.ticks_remaining <= 0) return;
+    if (sfx.rows_remaining <= 0) return;
     if (sfx.voice_idx < 0 || sfx.voice_idx >= 6) return;
-    
+
     XfmSfxPattern& pat = m->sfx_patterns[sfx.sfx_id];
     int voice = sfx.voice_idx;
-    
+
     // Advance sample counter
     sfx.sample_in_row++;
 
@@ -879,11 +879,11 @@ static void update_sfx_voice(xfm_module* m, int slot)
     // Check if we've reached end of row
     if (sfx.sample_in_row >= pat.samples_per_row) {
         sfx.sample_in_row = 0;
-        sfx.ticks_remaining--;
+        sfx.rows_remaining--;
         sfx.current_row++;
-        
+
         // SFX finished?
-        if (sfx.ticks_remaining <= 0) {
+        if (sfx.rows_remaining <= 0) {
             m->chip->key_off(voice);
             m->voices[voice].active = false;
             m->voices[voice].priority = 0;
@@ -1209,7 +1209,7 @@ void xfm_song_play(xfm_module* m, xfm_song_id id, bool loop)
     m->active_song.song_id = id;
     m->active_song.current_row = 0;
     m->active_song.sample_in_row = 0;
-    m->active_song.ticks_remaining = pat.num_rows;
+    m->active_song.rows_remaining = pat.num_rows;
     m->active_song.active = true;
     m->active_song.loop = loop;
 
@@ -1303,19 +1303,19 @@ float xfm_get_auto_off_delay(xfm_module* m)
  *      - Calls chip->load_patch() for new notes
  *      - Calls chip->set_frequency() for pitch
  *      - Calls chip->key_on() to start envelope
- * 
+ *
  *   4. Check end of row
  *      - If sample_in_row >= samples_per_row:
  *        a. Reset sample_in_row = 0
  *        b. Increment current_row
- *        c. Check for pending song change (FM_SONG_SWITCH_STEP)
+ *        c. Check for pending song change (FM_SONG_SWITCH_ROW)
  *        d. Check end of song (loop or stop)
  *        e. song_process_row() - Parse next row pattern
- * 
+ *
  * ─────────────────────────────────────────────────────────────────────────────
  * ⏱️  NOTE TRIGGER TIMING
  * ─────────────────────────────────────────────────────────────────────────────
- * 
+ *
  * Song Row Structure:
  *   ┌──────────────────────────────────────────┐
  *   │ Row N     │ Gap │ Note │ Sustain │ Gap   │ → Row N+1
@@ -1348,8 +1348,8 @@ float xfm_get_auto_off_delay(xfm_module* m)
  * @param loop          Loop at end of song
  * @param current_row   Current row index (0 to num_rows-1)
  * @param sample_in_row Sample position within row (0 to samples_per_row-1)
- * @param ticks_remaining Rows remaining in song
- * 
+ * @param rows_remaining Rows remaining in song
+ *
  * ─────────────────────────────────────────────────────────────────────────────
  * @param m Module instance
  * @param num_samples Number of samples to advance ( = frames from audio callback)
@@ -1431,8 +1431,8 @@ static void update_song(xfm_module* m, int num_samples)
                 }
             }
 
-            // Check for pending song change with STEP timing
-            if (m->pending_song.pending && m->pending_song.timing == FM_SONG_SWITCH_STEP) {
+            // Check for pending song change with ROW timing
+            if (m->pending_song.pending && m->pending_song.timing == FM_SONG_SWITCH_ROW) {
                 xfm_song_play(m, m->pending_song.song_id, song.loop);
                 m->pending_song.pending = false;
                 continue;
@@ -1442,7 +1442,7 @@ static void update_song(xfm_module* m, int num_samples)
             if (song.current_row >= pat.num_rows) {
                 if (song.loop) {
                     song.current_row = 0;
-                    song.ticks_remaining = pat.num_rows;
+                    song.rows_remaining = pat.num_rows;
                 } else {
                     // Stop song
                     for (int ch = 0; ch < 6; ch++) {

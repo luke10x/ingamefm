@@ -141,7 +141,7 @@ int main(int argc, char** argv)
         }
         if (iterations == 800) {
             printf("Switching to song 2...\n");
-            xfm_wav_song_schedule(g_module, 2, XFM_WAV_SWITCH_STEP);
+            xfm_wav_song_schedule(g_module, 2, XFM_WAV_SWITCH_ROW);
         }
     }
     

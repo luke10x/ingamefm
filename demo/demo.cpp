@@ -996,12 +996,12 @@ static void drawPanel(AppState& app)
             }
             ImGui::SameLine();
             if (ImGui::Button("Song 1 - Next Row", ImVec2(-1, 0))) {
-                xfm_song_schedule(app.music_module, SONG_ID_1, FM_SONG_SWITCH_STEP);
+                xfm_song_schedule(app.music_module, SONG_ID_1, FM_SONG_SWITCH_ROW);
                 app.current_song_id = SONG_ID_1;
                 app.total_rows = xfm_song_get_total_rows(app.music_module, SONG_ID_1);
             }
         }
-        
+
         if (app.current_song_id != SONG_ID_2) {
             if (ImGui::Button("Song 2 - Now", ImVec2(hw, 0))) {
                 xfm_song_play(app.music_module, SONG_ID_2, true);
@@ -1010,7 +1010,7 @@ static void drawPanel(AppState& app)
             }
             ImGui::SameLine();
             if (ImGui::Button("Song 2 - Next Row", ImVec2(-1, 0))) {
-                xfm_song_schedule(app.music_module, SONG_ID_2, FM_SONG_SWITCH_STEP);
+                xfm_song_schedule(app.music_module, SONG_ID_2, FM_SONG_SWITCH_ROW);
                 app.current_song_id = SONG_ID_2;
                 app.total_rows = xfm_song_get_total_rows(app.music_module, SONG_ID_2);
             }
