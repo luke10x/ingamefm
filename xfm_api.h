@@ -32,6 +32,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "ymfm.h"
+#include "ymfm_opn.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -61,6 +64,120 @@ extern "C" {
  * OPN (YM2612 / YM3438 style)
  * ============================================================================= */
 
+// =============================================================================
+// FM MODULE INTERNAL STRUCTURE
+// =============================================================================
+
+// Voice state for polyphonic playback
+struct XfmVoice {
+    int     midi_note;      // current MIDI note, -1 if free
+    int     patch_id;       // current patch
+    bool    active;         // voice is sounding
+    int     age;            // age counter for voice stealing (higher = older)
+    int     priority;       // priority for SFX stealing (0 = piano, 1-9 = SFX)
+    int     sfx_id;         // SFX ID if playing SFX, -1 otherwise
+};
+
+// SFX pattern event (one row)
+struct XfmSfxEvent {
+    int     note;           // MIDI note, -1 = none, -2 = off
+    int     patch_id;       // patch/instrument ID, -1 = inherit
+};
+
+// SFX pattern
+struct XfmSfxPattern {
+    int             num_rows;
+    int             tick_rate;
+    int             speed;
+    int             samples_per_row;
+    XfmSfxEvent*     rows;     // array of num_rows events
+};
+
+// Active SFX voice tracking
+struct XfmActiveSfx {
+    int     sfx_id;         // which SFX is playing
+    int     priority;       // priority level
+    int     voice_idx;      // which voice it's using
+    int     current_row;    // current row in pattern
+    int     sample_in_row;  // current sample within row
+    int     rows_remaining; // rows remaining (for duration tracking)
+    int     last_patch_id;  // last instrument used
+    int     pending_gap;    // gap samples before key-on (dynamic)
+    bool    pending_has_note; // note waiting to be committed
+    int     pending_note;   // pending MIDI note
+    int     pending_patch_id; // pending patch
+    bool    active;         // is currently playing
+
+    // Automatic note-off scheduling
+    bool    auto_off_scheduled;
+    int     auto_off_at_sample;
+};
+
+// Song channel event
+struct XfmSongEvent {
+    int     note;           // MIDI note, -1 = none, -2 = off
+    int     patch_id;       // patch/instrument ID, -1 = inherit
+    int     volume;         // volume 0-127, -1 = inherit
+};
+
+// Song channel state
+struct XfmSongChannel {
+    int             current_patch;
+    int             current_volume;
+    int             pending_note;
+    int             pending_patch;
+    int             pending_volume;
+    bool            pending_has_note;
+    bool            pending_is_off;
+    int             pending_gap;  // Gap samples before key-on
+    
+    // For automatic OFF: when a new note arrives, previous note gets
+    // keyed off at sample 1, and new note waits until end of row
+    bool            wait_for_next_row;  // Delay keyon until next row starts
+};
+
+// Song pattern (multi-channel)
+struct XfmSongPattern {
+    int             num_rows;
+    int             num_channels;
+    int             tick_rate;
+    int             speed;
+    int             samples_per_row;
+    XfmSongEvent**   rows;     // array of num_rows, each is array of num_channels events
+};
+
+// Active song tracking
+struct XfmActiveSong {
+    int             song_id;
+    int             current_row;
+    int             sample_in_row;
+    int             rows_remaining;  // for loop tracking
+    bool            active;
+    bool            loop;
+    XfmSongChannel   channels[6];
+};
+
+/**
+ * Song switch timing options.
+ */
+typedef enum {
+    FM_SONG_SWITCH_NOW = 0,     /* Switch immediately */
+    FM_SONG_SWITCH_ROW,         /* Switch at next row */
+    FM_SONG_SWITCH_LOOP          /* Switch at next loop point */
+} xfm_song_switch_timing;
+
+
+// Pending song change
+struct XfmPendingSong {
+    int                 song_id;
+    xfm_song_switch_timing timing;
+    bool                pending;
+};
+
+// =============================================================================
+// YM2612 Chip Wrapper (same as old EggsFMChip, standalone)
+// =============================================================================
+
 typedef struct xfm_patch_opn_operator
 {
     int8_t  DT;     /* detune (-3..+3) */
@@ -85,6 +202,206 @@ typedef struct xfm_patch_opn
 
     xfm_patch_opn_operator op[4]; /* 4 operators */
 } xfm_patch_opn;
+
+class XfmChipOpn
+{
+public:
+    static constexpr uint32_t YM_CLOCK = 7670453;
+
+    // Minimal ymfm interface
+    class Interface : public ymfm::ymfm_interface {
+    public:
+        void ymfm_set_timer(uint32_t, int32_t) override {}
+        void ymfm_set_busy_end(uint32_t)       override {}
+        bool ymfm_is_busy()                    override { return false; }
+    };
+
+    Interface intf;
+    ymfm::ym3438 chip;
+    int acc_err;  // Bresenham resampling accumulator
+
+    XfmChipOpn() : chip(intf), acc_err(0) { chip.reset(); }
+
+    void write(uint8_t port, uint8_t reg, uint8_t val) {
+        uint8_t addr = port * 2;
+        chip.write(addr,   reg);
+        chip.write(addr+1, val);
+    }
+
+    void load_patch(const xfm_patch_opn& p, int ch) {
+        // YM2612 slot order in registers: OP1, OP3, OP2, OP4
+        // Patch array order:              OP1, OP2, OP3, OP4
+        const int slotMap[4] = { 0, 2, 1, 3 };
+
+        const uint8_t port = (ch >= 3) ? 1 : 0;
+        const int     hwch = ch % 3;
+
+        for (int patchOp = 0; patchOp < 4; patchOp++) {
+            int hwSlot     = slotMap[patchOp];
+            const auto& op = p.op[patchOp];
+
+            uint8_t dt_hw = static_cast<uint8_t>(((int)op.DT + 3) & 0x07);
+            write(port, 0x30 + hwSlot * 4 + hwch, (dt_hw << 4) | (op.MUL & 0x0F));
+            write(port, 0x40 + hwSlot * 4 + hwch, op.TL & 0x7F);
+            write(port, 0x50 + hwSlot * 4 + hwch, ((op.RS & 0x03) << 6) | (op.AR & 0x1F));
+            write(port, 0x60 + hwSlot * 4 + hwch, ((op.AM & 0x01) << 7) | (op.DR & 0x1F));
+            write(port, 0x70 + hwSlot * 4 + hwch, op.SR & 0x1F);
+            write(port, 0x80 + hwSlot * 4 + hwch, ((op.SL & 0x0F) << 4) | (op.RR & 0x0F));
+            uint8_t ssg_hw = (op.SSG > 0) ? (0x08 | ((op.SSG - 1) & 0x07)) : 0;
+            write(port, 0x90 + hwSlot * 4 + hwch, ssg_hw);
+        }
+        write(port, 0xB0 + hwch, ((p.FB & 0x07) << 3) | (p.ALG & 0x07));
+        write(port, 0xB4 + hwch, 0xC0 | ((p.AMS & 0x03) << 4) | (p.FMS & 0x07));
+    }
+
+    void enable_lfo(bool enable, uint8_t freq) {
+        write(0, 0x22, enable ? (0x08 | (freq & 0x07)) : 0x00);
+    }
+
+    void reset_resample_accum() {
+        acc_err = 0;
+    }
+
+    void reset_chip() {
+        chip.reset();
+    }
+
+    void set_frequency(int ch, double hz, int octaveOffset = 0) {
+        const uint8_t port = (ch >= 3) ? 1 : 0;
+        const int     hwch = ch % 3;
+
+        hz *= std::pow(2.0, static_cast<double>(octaveOffset));
+
+        // FREF = chip's native sample rate at YM_CLOCK
+        // YM2612: internal clock = master / 6, sample rate = internal / 24 = master / 144
+        static constexpr double FREF = static_cast<double>(YM_CLOCK) / 144.0;
+        int block = 4;
+        double fn = hz * static_cast<double>(1 << (21 - block)) / FREF;
+        while (fn > 0x7FF && block < 7) { block++; fn /= 2.0; }
+        while (fn < 0x200 && block > 0) { block--; fn *= 2.0; }
+        auto fnum = static_cast<uint16_t>(std::min(0x7FF, std::max(0, static_cast<int>(fn))));
+        write(port, 0xA4 + hwch, ((block & 7) << 3) | ((fnum >> 8) & 0x07));
+        write(port, 0xA0 + hwch, fnum & 0xFF);
+    }
+
+    void key_on(int ch) {
+        write(0, 0x28, 0xF0 | ((ch >= 3) ? 0x04 : 0x00) | (ch % 3));
+    }
+
+    void key_off(int ch) {
+        write(0, 0x28, ((ch >= 3) ? 0x04 : 0x00) | (ch % 3));
+    }
+    
+    // Hard mute - instantly silence channel by maxing out TL on all operators
+    // This is more aggressive than key_off which still plays release envelope
+    void hard_mute(int ch) {
+        const uint8_t port = (ch >= 3) ? 1 : 0;
+        const int hwch = ch % 3;
+        // Set TL=127 (max attenuation = silence) on all 4 operators
+        for (int slot = 0; slot < 4; slot++) {
+            write(port, 0x40 + slot * 4 + hwch, 0x7F);
+        }
+        // Also key off to reset state
+        key_off(ch);
+    }
+
+    // Generate one sample at 44100 Hz reference rate
+    void generate(int16_t* L, int16_t* R) {
+        ymfm::ym3438::output_data out;
+        chip.generate(&out, 1);
+        *L = static_cast<int16_t>(std::max(-32768, std::min(32767, out.data[0])));
+        *R = static_cast<int16_t>(std::max(-32768, std::min(32767, out.data[1])));
+    }
+    
+    // Generate 'samples' stereo frames at given sample_rate using Bresenham
+    // to maintain correct pitch at any output rate
+    void generate_buffer(int16_t* stream, int samples, int sample_rate) {
+
+        /*
+        Clocking
+        The general philosophy of the emulators provided here is that they are clock-independent. Much like the actual chips, you (the consumer) control the clock; 
+        the chips themselves have no idea what time it is. They just tick forward each time you ask them to.
+
+        But what if I want to output at a "normal" rate, like 44.1kHz? Sorry, you'll have to rate convert as needed.
+        */
+        static int REF_RATE = chip.sample_rate(YM_CLOCK);
+        
+        for (int i = 0; i < samples; i++) {
+            int16_t L, R;
+            do {
+                generate(&L, &R);
+                this->acc_err += sample_rate;
+            } while (this->acc_err < REF_RATE);
+            this->acc_err -= REF_RATE;
+            stream[i * 2 + 0] = L;
+            stream[i * 2 + 1] = R;
+        }
+    }
+};
+
+/* =============================================================================
+ * CHIP TYPES
+ * ============================================================================= */
+
+typedef enum {
+    XFM_CHIP_YM2612 = 0,  /* OPN2 — original, authentic Sega sound */
+    XFM_CHIP_YM3438,      /* OPN2C — CMOS, cleaner */
+    XFM_CHIP_OPM,         /* YM2151 */
+    XFM_CHIP_OPQ,         /* extended */
+    XFM_CHIP_OPL2,
+    XFM_CHIP_OPL3
+} xfm_chip_type;
+
+struct xfm_module {
+    // Configuration
+    int             sample_rate;
+    int             buffer_frames;
+    xfm_chip_type    chip_type;
+    float           volume;
+
+    // OPN chip instance (now uses YM3438 variant for accurate DAC behavior)
+    XfmChipOpn*      chip;
+
+    // Patch storage (up to 256 patches)
+    xfm_patch_opn    patches[256];
+    bool            patch_present[256];
+
+    // Voice pool (6 voices for OPN)
+    XfmVoice         voices[6];
+    int             voice_age_counter;
+
+    // SFX patterns (up to 256 SFX definitions)
+    XfmSfxPattern    sfx_patterns[256];
+    bool            sfx_present[256];
+
+    // Active SFX tracking (up to 6 concurrent SFX, one per voice)
+    XfmActiveSfx     active_sfx[6];
+
+    // Song patterns (up to 16 songs)
+    XfmSongPattern   song_patterns[16];
+    bool            song_present[16];
+
+    // Active song
+    XfmActiveSong    active_song;
+    XfmPendingSong   pending_song;
+
+    // Channel state tracking
+    int             current_patch[6];
+    bool            channel_active[6];
+
+    // LFO state
+    bool            lfo_enable;
+    int             lfo_freq;
+
+    // Automatic note off delay (0.0 = immediate, 1.0 = full row)
+    float           auto_off_delay;  // Default 0.3 (30% of row)
+
+    // Note: For future OPM/OPL support, we would:
+    //   - Add union { XfmChipOpn* opn; XfmChipOpm* opm; XfmChipOpl* opl; }
+    //   - Switch on chip_type in all chip operations
+    //   - Add patch format validation in xfm_patch_set()
+};
+
 
 /* =============================================================================
  * OPM (YM2151 style)
@@ -165,19 +482,6 @@ typedef int xfm_voice_id;
 typedef int xfm_patch_id;
 
 #define FM_VOICE_INVALID (-1)
-
-/* =============================================================================
- * CHIP TYPES
- * ============================================================================= */
-
-typedef enum {
-    XFM_CHIP_YM2612 = 0,  /* OPN2 — original, authentic Sega sound */
-    XFM_CHIP_YM3438,      /* OPN2C — CMOS, cleaner */
-    XFM_CHIP_OPM,         /* YM2151 */
-    XFM_CHIP_OPQ,         /* extended */
-    XFM_CHIP_OPL2,
-    XFM_CHIP_OPL3
-} xfm_chip_type;
 
 /* =============================================================================
  * MODULE LIFETIME
@@ -299,15 +603,6 @@ xfm_song_id xfm_song_declare(
  * @param loop true = loop indefinitely, false = play once
  */
 void xfm_song_play(xfm_module* m, xfm_song_id id, bool loop);
-
-/**
- * Song switch timing options.
- */
-typedef enum {
-    FM_SONG_SWITCH_NOW = 0,     /* Switch immediately */
-    FM_SONG_SWITCH_ROW,         /* Switch at next row */
-    FM_SONG_SWITCH_LOOP          /* Switch at next loop point */
-} xfm_song_switch_timing;
 
 /**
  * Schedule a song change.

@@ -9,6 +9,7 @@
 
 // Include implementation first to access internal structures
 #include "xfm_api.h"
+#include "xfm_export.h"
 // #include "xfm_impl.cpp"
 
 // =============================================================================
@@ -463,4 +464,303 @@ extern "C" void* xfm_export_sfx_to_memory(xfm_module* m, int sfx_id, int* outSiz
     }
 
     return wav_buffer;
+}
+
+// =============================================================================
+// YIELDABLE EXPORT IMPLEMENTATION
+// =============================================================================
+
+// --- Song Export ---
+
+int xfm_export_song_begin(xfm_export_song_state* state, xfm_module* m, xfm_song_id song_id, int samples_per_chunk)
+{
+    if (!state || !m) return -1;
+    if (song_id <= 0 || song_id > 15) return -1;
+
+    int num_rows = xfm_song_get_total_rows(m, song_id);
+    if (num_rows <= 0) return -1;
+
+    int samples_per_row = m->song_patterns[song_id].samples_per_row;
+    int total_rows = num_rows + 2;
+    int total_samples = total_rows * samples_per_row;
+
+    // Allocate intermediate render buffer
+    int16_t* buffer = (int16_t*)malloc(total_samples * 2 * sizeof(int16_t));
+    if (!buffer) {
+        fprintf(stderr, "xfm_export_song_begin: Failed to allocate buffer\n");
+        return -1;
+    }
+    memset(buffer, 0, total_samples * 2 * sizeof(int16_t));
+
+    // Start song playback
+    xfm_song_play(m, song_id, true);
+
+    // Initialize state
+    state->module = m;
+    state->song_id = song_id;
+    state->render_buffer = buffer;
+    state->max_samples = total_samples;
+    state->samples_per_chunk = samples_per_chunk;
+    state->samples_rendered = 0;
+    state->total_samples = total_samples;
+    state->phase = 0;  // rendering
+    state->last_non_silent = 0;
+    state->done = false;
+    state->failed = false;
+    state->progress = 0.0f;
+    state->wav_buffer = NULL;
+    state->max_render_samples = m->sample_rate * 180;  // 3 minute hard limit
+    if (state->max_render_samples > total_samples) state->max_render_samples = total_samples;
+    state->wav_size = 0;
+
+    return 0;
+}
+
+int xfm_export_song_step(xfm_export_song_state* state)
+{
+    if (!state || !state->module || state->done || state->failed) return -1;
+
+    if (state->phase == 0) {
+        // Rendering phase: render up to samples_per_chunk samples per call,
+        // but internally use buffer_frames chunks to match original exporter behavior
+        int frames_per_chunk = state->module->buffer_frames;
+        int target_frames = state->samples_per_chunk;
+        int rendered_this_step = 0;
+
+        while (rendered_this_step < target_frames) {
+            int frames_to_render = frames_per_chunk;
+            int remaining = state->max_render_samples - state->samples_rendered;
+            int target_remaining = target_frames - rendered_this_step;
+            if (frames_to_render > remaining) frames_to_render = remaining;
+            if (frames_to_render > target_remaining) frames_to_render = target_remaining;
+            if (frames_to_render <= 0) {
+                // All done rendering, move to trimming
+                state->phase = 1;
+                goto do_trim;
+            }
+
+            xfm_mix_song(state->module, state->render_buffer + (state->samples_rendered * 2), frames_to_render);
+            state->samples_rendered += frames_to_render;
+            rendered_this_step += frames_to_render;
+        }
+
+        if (state->samples_rendered >= state->max_render_samples) {
+            state->phase = 1;
+        }
+
+do_trim:
+        if (state->phase == 1) {
+            // Trimming phase: find last non-silent sample
+            state->last_non_silent = state->samples_rendered - 1;
+            while (state->last_non_silent > 0) {
+                int idx = state->last_non_silent * 2;
+                if (state->render_buffer[idx] > 100 || state->render_buffer[idx] < -100 ||
+                    state->render_buffer[idx + 1] > 100 || state->render_buffer[idx + 1] < -100) {
+                    break;
+                }
+                state->last_non_silent--;
+            }
+            state->phase = 2;
+        }
+
+        if (state->phase == 2) {
+            // Trailing silence phase: add 2 seconds of silence
+            int trailing_silence = state->module->sample_rate * 2;
+            int final_size = state->last_non_silent + 1 + trailing_silence;
+            if (final_size > state->max_samples) final_size = state->max_samples;
+
+            for (int i = (state->last_non_silent + 1) * 2; i < final_size * 2; i++) {
+                state->render_buffer[i] = 0;
+            }
+            state->samples_rendered = final_size;
+
+            xfm_song_play(state->module, 0, false);
+
+            state->done = true;
+            state->progress = 1.0f;
+        }
+
+        state->progress = (float)state->samples_rendered / state->max_render_samples * 0.8f;
+        return 0;
+    }
+
+    if (state->phase == 1) {
+        state->last_non_silent = state->samples_rendered - 1;
+        while (state->last_non_silent > 0) {
+            int idx = state->last_non_silent * 2;
+            if (state->render_buffer[idx] > 100 || state->render_buffer[idx] < -100 ||
+                state->render_buffer[idx + 1] > 100 || state->render_buffer[idx + 1] < -100) {
+                break;
+            }
+            state->last_non_silent--;
+        }
+        state->phase = 2;
+        return 0;
+    }
+
+    if (state->phase == 2) {
+        int trailing_silence = state->module->sample_rate * 2;
+        int final_size = state->last_non_silent + 1 + trailing_silence;
+        if (final_size > state->max_samples) final_size = state->max_samples;
+
+        for (int i = (state->last_non_silent + 1) * 2; i < final_size * 2; i++) {
+            state->render_buffer[i] = 0;
+        }
+        state->samples_rendered = final_size;
+
+        xfm_song_play(state->module, 0, false);
+
+        state->done = true;
+        state->progress = 1.0f;
+        return 0;
+    }
+
+    return -1;
+}
+void* xfm_export_song_finalize(xfm_export_song_state* state, int* outSize)
+{
+    if (!state || !state->done) return NULL;
+
+    void* wav_buffer = create_wav_buffer(state->module->sample_rate, state->samples_rendered, state->render_buffer, outSize);
+    if (wav_buffer) {
+        state->wav_buffer = wav_buffer;
+        state->wav_size = *outSize;
+        printf("Exported song %d to memory (%d bytes, %d samples, %d Hz, %.2f seconds)\n",
+               state->song_id, *outSize, state->samples_rendered, state->module->sample_rate,
+               (float)state->samples_rendered / state->module->sample_rate);
+    }
+    return wav_buffer;
+}
+
+void xfm_export_song_cleanup(xfm_export_song_state* state)
+{
+    if (!state) return;
+    if (state->render_buffer) {
+        free(state->render_buffer);
+        state->render_buffer = NULL;
+    }
+    // Note: wav_buffer is NOT freed here - caller owns it after finalize
+}
+
+// --- SFX Export ---
+
+int xfm_export_sfx_begin(xfm_export_sfx_state* state, xfm_module* m, int sfx_id, int samples_per_chunk)
+{
+    if (!state || !m) return -1;
+    if (sfx_id < 0 || sfx_id > 255) return -1;
+    if (!m->sfx_present[sfx_id]) return -1;
+
+    int num_rows = m->sfx_patterns[sfx_id].num_rows;
+    int samples_per_row = m->sfx_patterns[sfx_id].samples_per_row;
+    int total_rows = num_rows + 4;  // Extra rows for release
+    int total_samples = total_rows * samples_per_row;
+
+    // Allocate intermediate render buffer
+    int16_t* buffer = (int16_t*)malloc(total_samples * 2 * sizeof(int16_t));
+    if (!buffer) {
+        fprintf(stderr, "xfm_export_sfx_begin: Failed to allocate buffer\n");
+        return -1;
+    }
+    memset(buffer, 0, total_samples * 2 * sizeof(int16_t));
+
+    // Set up SFX on voice 0 (matches render_sfx_to_buffer)
+    int voice = 0;
+    m->voices[voice].active = true;
+    m->voices[voice].sfx_id = sfx_id;
+    m->voices[voice].priority = 0;
+    m->voices[voice].age = ++m->voice_age_counter;
+    m->voices[voice].midi_note = -1;
+    m->voices[voice].patch_id = -1;
+    m->channel_active[voice] = false;
+
+    m->active_sfx[voice].sfx_id = sfx_id;
+    m->active_sfx[voice].priority = 0;
+    m->active_sfx[voice].voice_idx = voice;
+    m->active_sfx[voice].current_row = 0;
+    m->active_sfx[voice].sample_in_row = 0;
+    m->active_sfx[voice].rows_remaining = num_rows;
+    m->active_sfx[voice].last_patch_id = -1;
+    m->active_sfx[voice].pending_has_note = false;
+    m->active_sfx[voice].pending_note = -1;
+    m->active_sfx[voice].pending_patch_id = -1;
+    m->active_sfx[voice].pending_gap = 0;
+    m->active_sfx[voice].active = true;
+    m->active_sfx[voice].auto_off_scheduled = false;
+    m->active_sfx[voice].auto_off_at_sample = 0;
+
+    // Initialize state
+    state->module = m;
+    state->sfx_id = sfx_id;
+    state->render_buffer = buffer;
+    state->max_samples = total_samples;
+    state->samples_per_chunk = samples_per_chunk;
+    state->samples_rendered = 0;
+    state->total_samples = total_samples;
+    state->done = false;
+    state->failed = false;
+    state->progress = 0.0f;
+    state->wav_buffer = NULL;
+    state->wav_size = 0;
+
+    return 0;
+}
+
+int xfm_export_sfx_step(xfm_export_sfx_state* state)
+{
+    if (!state || !state->module || state->done || state->failed) return -1;
+
+    // Render up to samples_per_chunk samples per call,
+    // but internally use buffer_frames chunks to match original exporter behavior
+    int frames_per_chunk = state->module->buffer_frames;
+    int target_frames = state->samples_per_chunk;
+    int rendered_this_step = 0;
+
+    while (rendered_this_step < target_frames) {
+        int frames_to_render = frames_per_chunk;
+        int remaining = state->total_samples - state->samples_rendered;
+        int target_remaining = target_frames - rendered_this_step;
+        if (frames_to_render > remaining) frames_to_render = remaining;
+        if (frames_to_render > target_remaining) frames_to_render = target_remaining;
+        if (frames_to_render <= 0) {
+            state->done = true;
+            state->progress = 1.0f;
+            return 0;
+        }
+
+        xfm_mix_sfx(state->module, state->render_buffer + (state->samples_rendered * 2), frames_to_render);
+        state->samples_rendered += frames_to_render;
+        rendered_this_step += frames_to_render;
+    }
+
+    state->progress = (float)state->samples_rendered / state->total_samples;
+
+    if (state->samples_rendered >= state->total_samples) {
+        state->done = true;
+        state->progress = 1.0f;
+    }
+
+    return 0;
+}
+void* xfm_export_sfx_finalize(xfm_export_sfx_state* state, int* outSize)
+{
+    if (!state || !state->done) return NULL;
+
+    void* wav_buffer = create_wav_buffer(state->module->sample_rate, state->samples_rendered, state->render_buffer, outSize);
+    if (wav_buffer) {
+        state->wav_buffer = wav_buffer;
+        state->wav_size = *outSize;
+        printf("Exported SFX %d to memory (%d bytes, %d samples, %d Hz, %.2f seconds)\n",
+               state->sfx_id, *outSize, state->samples_rendered, state->module->sample_rate,
+               (float)state->samples_rendered / state->module->sample_rate);
+    }
+    return wav_buffer;
+}
+
+void xfm_export_sfx_cleanup(xfm_export_sfx_state* state)
+{
+    if (!state) return;
+    if (state->render_buffer) {
+        free(state->render_buffer);
+        state->render_buffer = NULL;
+    }
 }
