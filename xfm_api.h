@@ -125,16 +125,33 @@ struct XfmActiveSfx {
 };
 
 // Song channel event
+struct XfmSongOpnEffect {
+    uint8_t code;
+    uint8_t value;
+};
+
 struct XfmSongEvent {
     int     note;           // MIDI note, -1 = none, -2 = off
     int     patch_id;       // patch/instrument ID, -1 = inherit
     int     volume;         // volume 0-127, -1 = inherit
+    int     legato;         // -1 = no change, 0 = off, 1 = on
+    int     pitch_slide;    // <= -1000000 = no change, 0 = off, positive = up, negative = down
+    int     portamento;     // -1 = no change, 0 = off, >0 = speed
+    int     vibrato;        // -1 = no change, 0 = off, 0xxyy = speed/depth
+    int     tremolo;        // -1 = no change, 0 = off, 0xxyy = speed/depth
+    int     volume_slide;   // <= -1000000 = no change, 0 = off, positive = up, negative = down
+    int     note_slide;     // <= -1000000 = no change, signed 0xxyy speed/semitones
+    int     fine_pitch;     // -1 = no change, 0..255, 0x80 = neutral
+    int     hard_reset;     // -1 = no change, 0 = off, 1 = on
+    int     opn_effect_count;
+    XfmSongOpnEffect opn_effects[16];
 };
 
 // Song channel state
 struct XfmSongChannel {
     int             current_patch;
     int             current_volume;
+    double          current_volume_f;
     int             pending_note;
     int             pending_patch;
     int             pending_volume;
@@ -150,11 +167,25 @@ struct XfmSongChannel {
     // slides, and per-operator patch edits should become scheduled row events
     // that update this state before rendering the next chunk.
     bool            legato_enabled;
+    int             pitch_slide_speed;
     bool            portamento_active;
+    int             portamento_speed;
     int             portamento_target_note;
     double          current_hz;
     double          target_hz;
     double          portamento_step_hz;
+    int             volume_slide_speed;
+    bool            note_slide_active;
+    double          note_slide_target_hz;
+    double          note_slide_step_hz;
+    int             fine_pitch_cents;
+    int             vibrato_speed;
+    int             vibrato_depth;
+    double          vibrato_phase;
+    int             tremolo_speed;
+    int             tremolo_depth;
+    double          tremolo_phase;
+    bool            envelope_hard_reset;
     bool            live_patch_valid;
 };
 
@@ -416,6 +447,10 @@ struct xfm_module {
     // Channel state tracking
     int             current_patch[6];
     bool            channel_active[6];
+    xfm_patch_opn    live_patches[6];
+    bool            live_patch_valid[6];
+    int             live_patch_id[6];
+    uint8_t         live_op_mask[6];
 
     // LFO state
     bool            lfo_enable;

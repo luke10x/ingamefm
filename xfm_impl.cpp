@@ -18,6 +18,10 @@
 #include <new>
 
 
+static constexpr int SONG_PITCH_SLIDE_NONE = -1000000;
+static constexpr int SONG_VOLUME_SLIDE_NONE = -1000000;
+static constexpr int SONG_NOTE_SLIDE_NONE = -1000000;
+static constexpr double XFM_PI = 3.14159265358979323846;
 
 
 // Gap calculation helpers - scale by sample rate for consistent timing
@@ -84,6 +88,12 @@ xfm_module* xfm_module_create(int sample_rate, int buffer_frames, xfm_chip_type 
     std::memset(m->patch_present, 0, sizeof(m->patch_present));
     std::memset(m->current_patch, -1, sizeof(m->current_patch));
     std::memset(m->channel_active, 0, sizeof(m->channel_active));
+    std::memset(m->live_patches, 0, sizeof(m->live_patches));
+    std::memset(m->live_patch_valid, 0, sizeof(m->live_patch_valid));
+    for (int i = 0; i < 6; i++) {
+        m->live_patch_id[i] = -1;
+        m->live_op_mask[i] = 0x0F;
+    }
 
     // Initialize voice pool
     for (int i = 0; i < 6; i++) {
@@ -138,15 +148,31 @@ xfm_module* xfm_module_create(int sample_rate, int buffer_frames, xfm_chip_type 
     for (int ch = 0; ch < 6; ch++) {
         m->active_song.channels[ch].current_patch = -1;
         m->active_song.channels[ch].current_volume = 127;
+        m->active_song.channels[ch].current_volume_f = 127.0;
+        m->active_song.channels[ch].current_volume_f = 127.0;
         m->active_song.channels[ch].pending_has_note = false;
         m->active_song.channels[ch].pending_is_off = false;
         m->active_song.channels[ch].wait_for_next_row = false;
         m->active_song.channels[ch].legato_enabled = false;
+        m->active_song.channels[ch].pitch_slide_speed = 0;
         m->active_song.channels[ch].portamento_active = false;
+        m->active_song.channels[ch].portamento_speed = 0;
         m->active_song.channels[ch].portamento_target_note = -1;
         m->active_song.channels[ch].current_hz = 0.0;
         m->active_song.channels[ch].target_hz = 0.0;
         m->active_song.channels[ch].portamento_step_hz = 0.0;
+        m->active_song.channels[ch].volume_slide_speed = 0;
+        m->active_song.channels[ch].note_slide_active = false;
+        m->active_song.channels[ch].note_slide_target_hz = 0.0;
+        m->active_song.channels[ch].note_slide_step_hz = 0.0;
+        m->active_song.channels[ch].fine_pitch_cents = 0;
+        m->active_song.channels[ch].vibrato_speed = 0;
+        m->active_song.channels[ch].vibrato_depth = 0;
+        m->active_song.channels[ch].vibrato_phase = 0.0;
+        m->active_song.channels[ch].tremolo_speed = 0;
+        m->active_song.channels[ch].tremolo_depth = 0;
+        m->active_song.channels[ch].tremolo_phase = 0.0;
+        m->active_song.channels[ch].envelope_hard_reset = false;
         m->active_song.channels[ch].live_patch_valid = false;
     }
 
@@ -185,6 +211,9 @@ void xfm_module_reload_patches(xfm_module* m)
     // Reset current_patch tracking so patches reload on next note
     for (int i = 0; i < 6; i++) {
         m->current_patch[i] = -1;
+        m->live_patch_valid[i] = false;
+        m->live_patch_id[i] = -1;
+        m->live_op_mask[i] = 0x0F;
     }
 }
 
@@ -208,6 +237,9 @@ void xfm_module_reset_state(xfm_module* m)
         m->voices[i].age = 0;
         m->channel_active[i] = false;
         m->current_patch[i] = -1;
+        m->live_patch_valid[i] = false;
+        m->live_patch_id[i] = -1;
+        m->live_op_mask[i] = 0x0F;
         m->active_sfx[i].active = false;
         m->active_sfx[i].sfx_id = -1;
         m->active_sfx[i].voice_idx = -1;
@@ -233,6 +265,10 @@ void xfm_module_reset_state(xfm_module* m)
     m->active_song.sample_in_row = 0;
     m->active_song.current_row = 0;
     m->active_song.rows_remaining = 0;
+    for (int ch = 0; ch < 6; ch++) {
+        m->active_song.channels[ch].envelope_hard_reset = false;
+        m->active_song.channels[ch].live_patch_valid = false;
+    }
 }
 
 // =============================================================================
@@ -300,6 +336,13 @@ static int parse_hex2(const char* p) {
     if (h0 < 0 || h1 < 0) return -1;
     return h0 * 16 + h1;
 }
+
+static double note_to_hz(int midi_note)
+{
+    return 440.0 * std::pow(2.0, (midi_note - 69) / 12.0);
+}
+
+static bool song_is_carrier(uint8_t alg, int op);
 
 xfm_sfx_id xfm_sfx_declare(xfm_module* m, xfm_sfx_id id, const char* pattern_text, int tick_rate, int speed)
 {
@@ -883,6 +926,21 @@ xfm_song_id xfm_song_declare(xfm_module* m, xfm_song_id id, const char* pattern_
     song.rows = new XfmSongEvent*[num_rows];
     for (int r = 0; r < num_rows; r++) {
         song.rows[r] = new XfmSongEvent[num_channels];
+        for (int ch = 0; ch < num_channels; ch++) {
+            song.rows[r][ch].note = -1;
+            song.rows[r][ch].patch_id = -1;
+            song.rows[r][ch].volume = -1;
+            song.rows[r][ch].legato = -1;
+            song.rows[r][ch].pitch_slide = SONG_PITCH_SLIDE_NONE;
+            song.rows[r][ch].portamento = -1;
+            song.rows[r][ch].vibrato = -1;
+            song.rows[r][ch].tremolo = -1;
+            song.rows[r][ch].volume_slide = SONG_VOLUME_SLIDE_NONE;
+            song.rows[r][ch].note_slide = SONG_NOTE_SLIDE_NONE;
+            song.rows[r][ch].fine_pitch = -1;
+            song.rows[r][ch].hard_reset = -1;
+            song.rows[r][ch].opn_effect_count = 0;
+        }
     }
 
     // Parse each row - p is already at start of first data row
@@ -898,6 +956,16 @@ xfm_song_id xfm_song_declare(xfm_module* m, xfm_song_id id, const char* pattern_
             ev.note = -1;       // -1 = no note (keep playing)
             ev.patch_id = -1;   // -1 = inherit instrument
             ev.volume = -1;     // -1 = inherit volume
+            ev.legato = -1;     // -1 = no change
+            ev.pitch_slide = SONG_PITCH_SLIDE_NONE; // no change
+            ev.portamento = -1; // -1 = no change
+            ev.vibrato = -1;    // -1 = no change
+            ev.tremolo = -1;    // -1 = no change
+            ev.volume_slide = SONG_VOLUME_SLIDE_NONE; // no change
+            ev.note_slide = SONG_NOTE_SLIDE_NONE;     // no change
+            ev.fine_pitch = -1;  // -1 = no change
+            ev.hard_reset = -1;   // -1 = no change
+            ev.opn_effect_count = 0;
             
             if (!*p || *p == '\n') break;
             
@@ -918,8 +986,75 @@ xfm_song_id xfm_song_declare(xfm_module* m, xfm_song_id id, const char* pattern_
             for (int i = 0; i < 2 && *p && *p != '|' && *p != '\n'; i++) {
                 vol_str[i] = *p++;
             }
-            // Skip rest of channel
-            while (*p && *p != '|' && *p != '\n') p++;
+            // Be forgiving of effect-only cells written with one missing volume
+            // dot, e.g. "......0300" instead of the canonical ".......0300".
+            if (vol_str[0] == '.' && vol_str[1] && vol_str[1] != '.') {
+                p--;
+                vol_str[1] = '.';
+            }
+            // Parse effect cells. Furnace-style cells are 4 chars: effect + value.
+            while (*p && *p != '|' && *p != '\n') {
+                char fx[5] = {0};
+                int fx_len = 0;
+                while (fx_len < 4 && *p && *p != '|' && *p != '\n') {
+                    fx[fx_len++] = *p++;
+                }
+
+                if (fx_len == 4 && !(fx[0] == '.' && fx[1] == '.' && fx[2] == '.' && fx[3] == '.')) {
+                    int value = parse_hex2(fx + 2);
+                    if ((fx[0] == '0') && (fx[1] == '1') && value >= 0) {
+                        ev.pitch_slide = value;
+                    } else if ((fx[0] == '0') && (fx[1] == '2') && value >= 0) {
+                        ev.pitch_slide = -value;
+                    } else if ((fx[0] == '0') && (fx[1] == '3') && value >= 0) {
+                        ev.portamento = value;
+                    } else if ((fx[0] == '0') && (fx[1] == '4') && value >= 0) {
+                        ev.vibrato = value;
+                    } else if ((fx[0] == '0') && (fx[1] == '7') && value >= 0) {
+                        ev.tremolo = value;
+                    } else if ((fx[0] == '0') && (fx[1] == 'A' || fx[1] == 'a') && value >= 0) {
+                        int up = (value >> 4) & 0x0F;
+                        int down = value & 0x0F;
+                        ev.volume_slide = up - down;
+                    } else if ((fx[0] == 'E' || fx[0] == 'e') && (fx[1] == '1') && value >= 0) {
+                        ev.note_slide = value;
+                    } else if ((fx[0] == 'E' || fx[0] == 'e') && (fx[1] == '2') && value >= 0) {
+                        ev.note_slide = -value;
+                    } else if ((fx[0] == 'E' || fx[0] == 'e') && (fx[1] == '5') && value >= 0) {
+                        ev.fine_pitch = value;
+                    } else if ((fx[0] == 'E' || fx[0] == 'e') && (fx[1] == 'A' || fx[1] == 'a') && value >= 0) {
+                        ev.legato = value != 0 ? 1 : 0;
+                    } else if (value >= 0) {
+                        auto hex = [](char c) -> int {
+                            if (c >= '0' && c <= '9') return c - '0';
+                            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                            return -1;
+                        };
+                        int hi = hex(fx[0]);
+                        int lo = hex(fx[1]);
+                        if (hi >= 0 && lo >= 0) {
+                            int code = (hi << 4) | lo;
+                            bool is_opn_effect =
+                                code == 0x10 || code == 0x11 ||
+                                (code >= 0x12 && code <= 0x16) ||
+                                (code >= 0x19 && code <= 0x1D) ||
+                                code == 0x30 ||
+                                (code >= 0x50 && code <= 0x5F) ||
+                                (code >= 0x60 && code <= 0x63);
+
+                            if (code == 0x30) {
+                                ev.hard_reset = value != 0 ? 1 : 0;
+                            }
+                            if (is_opn_effect && ev.opn_effect_count < 16) {
+                                ev.opn_effects[ev.opn_effect_count].code = static_cast<uint8_t>(code);
+                                ev.opn_effects[ev.opn_effect_count].value = static_cast<uint8_t>(value);
+                                ev.opn_effect_count++;
+                            }
+                        }
+                    }
+                }
+            }
             
             // Parse note - only if not "..."
             if (note_str[0] && note_str[0] != '.') {
@@ -967,6 +1102,377 @@ static int find_next_note_row(XfmSongPattern& pat, int start_row, int ch)
     return -1;  // No more notes
 }
 
+static void song_load_channel_patch(xfm_module* m, int ch, int patch_id, int volume)
+{
+    if (!m || !m->chip) return;
+    if (patch_id < 0 || !m->patch_present[patch_id]) return;
+
+    if (!m->live_patch_valid[ch] || m->live_patch_id[ch] != patch_id) {
+        m->live_patches[ch] = m->patches[patch_id];
+        m->live_patch_valid[ch] = true;
+        m->live_patch_id[ch] = patch_id;
+        m->live_op_mask[ch] = 0x0F;
+    }
+    m->active_song.channels[ch].live_patch_valid = true;
+    m->current_patch[ch] = patch_id;
+    xfm_patch_opn patch = m->live_patches[ch];
+    int tl_add = ((0x7F - volume) * 127) / 0x7F;
+    for (int op = 0; op < 4; op++) {
+        if (song_is_carrier(patch.ALG, op)) {
+            patch.op[op].TL = std::min(127, (int)patch.op[op].TL + tl_add);
+        }
+    }
+
+    m->chip->load_patch(patch, ch);
+    m->chip->enable_lfo(m->lfo_enable, static_cast<uint8_t>(m->lfo_freq));
+}
+
+static bool song_is_carrier(uint8_t alg, int op)
+{
+    switch (alg) {
+        case 0: case 1: case 2: case 3: return op == 3;
+        case 4: return op == 1 || op == 3;
+        case 5: case 6: return op == 1 || op == 2 || op == 3;
+        case 7: return true;
+        default: return op == 3;
+    }
+}
+
+static void song_write_channel_tremolo(xfm_module* m, int ch, int attenuation)
+{
+    if (!m || !m->chip) return;
+    int patch_id = m->current_patch[ch];
+    if (patch_id < 0 || !m->patch_present[patch_id]) return;
+
+    const xfm_patch_opn& patch = m->live_patch_valid[ch] ? m->live_patches[ch] : m->patches[patch_id];
+    int volume = m->active_song.channels[ch].current_volume;
+    int tl_add = ((0x7F - volume) * 127) / 0x7F;
+    const int slotMap[4] = {0, 2, 1, 3};
+    uint8_t port = (ch >= 3) ? 1 : 0;
+    int hwch = ch % 3;
+
+    for (int op = 0; op < 4; op++) {
+        if (!song_is_carrier(patch.ALG, op)) continue;
+        if ((m->live_op_mask[ch] & (1 << op)) == 0) {
+            int hwSlot = slotMap[op];
+            m->chip->write(port, 0x40 + hwSlot * 4 + hwch, 0x7F);
+            continue;
+        }
+        int hwSlot = slotMap[op];
+        int tl = std::min(127, (int)patch.op[op].TL + tl_add + attenuation);
+        m->chip->write(port, 0x40 + hwSlot * 4 + hwch, (uint8_t)(tl & 0x7F));
+    }
+}
+
+static void song_write_opn_operator(xfm_module* m, int ch, int op)
+{
+    if (!m || !m->chip || ch < 0 || ch >= 6 || op < 0 || op >= 4) return;
+    if (!m->live_patch_valid[ch]) return;
+
+    const int slotMap[4] = {0, 2, 1, 3};
+    const uint8_t port = (ch >= 3) ? 1 : 0;
+    const int hwch = ch % 3;
+    const int hwSlot = slotMap[op];
+    const xfm_patch_opn_operator& o = m->live_patches[ch].op[op];
+
+    uint8_t dt_hw = XfmChipOpn::dt_to_hw(o.DT);
+    m->chip->write(port, 0x30 + hwSlot * 4 + hwch, (dt_hw << 4) | (o.MUL & 0x0F));
+    int tl = o.TL & 0x7F;
+    if ((m->live_op_mask[ch] & (1 << op)) == 0) {
+        tl = 127;
+    } else if (song_is_carrier(m->live_patches[ch].ALG, op)) {
+        int volume = m->active_song.channels[ch].current_volume;
+        tl = std::min(127, tl + ((0x7F - volume) * 127) / 0x7F);
+    }
+    m->chip->write(port, 0x40 + hwSlot * 4 + hwch, tl & 0x7F);
+    m->chip->write(port, 0x50 + hwSlot * 4 + hwch, ((o.RS & 0x03) << 6) | (o.AR & 0x1F));
+    m->chip->write(port, 0x60 + hwSlot * 4 + hwch, ((o.AM & 0x01) << 7) | (o.DR & 0x1F));
+    m->chip->write(port, 0x70 + hwSlot * 4 + hwch, o.SR & 0x1F);
+    m->chip->write(port, 0x80 + hwSlot * 4 + hwch, ((o.SL & 0x0F) << 4) | (o.RR & 0x0F));
+    uint8_t ssg_hw = (o.SSG > 0) ? (0x08 | ((o.SSG - 1) & 0x07)) : 0;
+    m->chip->write(port, 0x90 + hwSlot * 4 + hwch, ssg_hw);
+}
+
+static void song_write_opn_channel_regs(xfm_module* m, int ch)
+{
+    if (!m || !m->chip || ch < 0 || ch >= 6 || !m->live_patch_valid[ch]) return;
+    const uint8_t port = (ch >= 3) ? 1 : 0;
+    const int hwch = ch % 3;
+    const xfm_patch_opn& patch = m->live_patches[ch];
+    m->chip->write(port, 0xB0 + hwch, ((patch.FB & 0x07) << 3) | (patch.ALG & 0x07));
+    m->chip->write(port, 0xB4 + hwch, 0xC0 | ((patch.AMS & 0x03) << 4) | (patch.FMS & 0x07));
+}
+
+static int song_opn_dt_from_furnace(int value)
+{
+    static const int map[8] = {-3, -2, -1, 0, 1, 2, 3, 0};
+    return map[value & 7];
+}
+
+static void song_apply_opn_to_ops(xfm_module* m, int ch, int op_selector,
+                                  void (*apply)(xfm_patch_opn_operator&, int), int value)
+{
+    if (!m || ch < 0 || ch >= 6 || !m->live_patch_valid[ch]) return;
+    if (op_selector == 0) {
+        for (int op = 0; op < 4; op++) {
+            apply(m->live_patches[ch].op[op], value);
+            song_write_opn_operator(m, ch, op);
+        }
+        return;
+    }
+    if (op_selector >= 1 && op_selector <= 4) {
+        int op = op_selector - 1;
+        apply(m->live_patches[ch].op[op], value);
+        song_write_opn_operator(m, ch, op);
+    }
+}
+
+static void song_set_opn_operator_tl(xfm_module* m, int ch, int op, int value)
+{
+    if (!m || ch < 0 || ch >= 6 || op < 0 || op >= 4 || !m->live_patch_valid[ch]) return;
+    m->live_patches[ch].op[op].TL = static_cast<uint8_t>(std::min(127, std::max(0, value)));
+    if (song_is_carrier(m->live_patches[ch].ALG, op)) song_write_channel_tremolo(m, ch, 0);
+    else song_write_opn_operator(m, ch, op);
+}
+
+static void song_apply_opn_effect(xfm_module* m, int ch, const XfmSongOpnEffect& effect)
+{
+    if (!m || !m->chip || ch < 0 || ch >= 6) return;
+
+    int patch_id = m->active_song.channels[ch].current_patch;
+    if (!m->live_patch_valid[ch] && patch_id >= 0 && m->patch_present[patch_id]) {
+        m->live_patches[ch] = m->patches[patch_id];
+        m->live_patch_valid[ch] = true;
+        m->live_patch_id[ch] = patch_id;
+        m->active_song.channels[ch].live_patch_valid = true;
+    }
+    if (!m->live_patch_valid[ch]) return;
+
+    int code = effect.code;
+    int value = effect.value;
+    int x = (value >> 4) & 0x0F;
+    int y = value & 0x0F;
+
+    if (code == 0x10) {
+        xfm_module_set_lfo(m, x != 0, y);
+        return;
+    }
+    if (code == 0x11) {
+        m->live_patches[ch].FB = static_cast<uint8_t>(value & 0x07);
+        song_write_opn_channel_regs(m, ch);
+        return;
+    }
+    if (code >= 0x12 && code <= 0x15) {
+        song_set_opn_operator_tl(m, ch, code - 0x12, value);
+        return;
+    }
+    if (code == 0x16) {
+        if (x >= 1 && x <= 4) {
+            int op = x - 1;
+            m->live_patches[ch].op[op].MUL = static_cast<uint8_t>(y & 0x0F);
+            song_write_opn_operator(m, ch, op);
+        }
+        return;
+    }
+    if (code >= 0x19 && code <= 0x1D) {
+        int target = (code == 0x19) ? 0 : (code - 0x19);
+        song_apply_opn_to_ops(m, ch, target, [](xfm_patch_opn_operator& op, int v) {
+            op.AR = static_cast<uint8_t>(std::min(31, std::max(0, v)));
+        }, value);
+        return;
+    }
+    if (code == 0x50) {
+        song_apply_opn_to_ops(m, ch, x, [](xfm_patch_opn_operator& op, int v) {
+            op.AM = static_cast<uint8_t>(v ? 1 : 0);
+        }, y);
+        return;
+    }
+    if (code == 0x51) {
+        song_apply_opn_to_ops(m, ch, x, [](xfm_patch_opn_operator& op, int v) {
+            op.SL = static_cast<uint8_t>(std::min(15, std::max(0, v)));
+        }, y);
+        return;
+    }
+    if (code == 0x52) {
+        song_apply_opn_to_ops(m, ch, x, [](xfm_patch_opn_operator& op, int v) {
+            op.RR = static_cast<uint8_t>(std::min(15, std::max(0, v)));
+        }, y);
+        return;
+    }
+    if (code == 0x53) {
+        song_apply_opn_to_ops(m, ch, x, [](xfm_patch_opn_operator& op, int v) {
+            op.DT = static_cast<int8_t>(song_opn_dt_from_furnace(v));
+        }, y);
+        return;
+    }
+    if (code == 0x54) {
+        song_apply_opn_to_ops(m, ch, x, [](xfm_patch_opn_operator& op, int v) {
+            op.RS = static_cast<uint8_t>(std::min(3, std::max(0, v)));
+        }, y);
+        return;
+    }
+    if (code == 0x55) {
+        song_apply_opn_to_ops(m, ch, x, [](xfm_patch_opn_operator& op, int v) {
+            op.SSG = static_cast<uint8_t>((v >= 0 && v <= 7) ? (v + 1) : 0);
+        }, y);
+        return;
+    }
+    if (code >= 0x56 && code <= 0x5A) {
+        int target = (code == 0x56) ? 0 : (code - 0x56);
+        song_apply_opn_to_ops(m, ch, target, [](xfm_patch_opn_operator& op, int v) {
+            op.DR = static_cast<uint8_t>(std::min(31, std::max(0, v)));
+        }, value);
+        return;
+    }
+    if (code >= 0x5B && code <= 0x5F) {
+        int target = (code == 0x5B) ? 0 : (code - 0x5B);
+        song_apply_opn_to_ops(m, ch, target, [](xfm_patch_opn_operator& op, int v) {
+            op.SR = static_cast<uint8_t>(std::min(31, std::max(0, v)));
+        }, value);
+        return;
+    }
+    if (code == 0x60) {
+        if (x == 0) {
+            m->live_op_mask[ch] = static_cast<uint8_t>(y & 0x0F);
+            for (int op = 0; op < 4; op++) song_write_opn_operator(m, ch, op);
+        } else if (x >= 1 && x <= 4) {
+            int op = x - 1;
+            if (y) m->live_op_mask[ch] |= static_cast<uint8_t>(1 << op);
+            else m->live_op_mask[ch] &= static_cast<uint8_t>(~(1 << op));
+            song_write_opn_operator(m, ch, op);
+        }
+        return;
+    }
+    if (code == 0x61) {
+        m->live_patches[ch].ALG = static_cast<uint8_t>(value & 0x07);
+        song_write_opn_channel_regs(m, ch);
+        song_write_channel_tremolo(m, ch, 0);
+        return;
+    }
+    if (code == 0x62) {
+        m->live_patches[ch].FMS = static_cast<uint8_t>(value & 0x07);
+        song_write_opn_channel_regs(m, ch);
+        return;
+    }
+    if (code == 0x63) {
+        m->live_patches[ch].AMS = static_cast<uint8_t>(value & 0x03);
+        song_write_opn_channel_regs(m, ch);
+    }
+}
+
+static double song_channel_effective_hz(const XfmSongChannel& ch_state)
+{
+    double hz = ch_state.current_hz;
+    if (hz <= 0.0) return hz;
+
+    if (ch_state.fine_pitch_cents != 0) {
+        hz *= std::pow(2.0, ch_state.fine_pitch_cents / 1200.0);
+    }
+    if (ch_state.vibrato_depth > 0) {
+        double cents = std::sin(ch_state.vibrato_phase) * (ch_state.vibrato_depth * 7.0);
+        hz *= std::pow(2.0, cents / 1200.0);
+    }
+    return hz;
+}
+
+static void song_write_channel_frequency(xfm_module* m, int ch, const XfmSongChannel& ch_state)
+{
+    double hz = song_channel_effective_hz(ch_state);
+    if (hz > 0.0) {
+        m->chip->set_frequency(ch, hz, 0);
+    }
+}
+
+static void song_key_on_channel(xfm_module* m, int ch, XfmSongChannel& ch_state)
+{
+    if (ch_state.pending_patch < 0) return;
+    if (!m->patch_present[ch_state.pending_patch]) return;
+
+    song_load_channel_patch(m, ch, ch_state.pending_patch, ch_state.current_volume);
+    double hz = note_to_hz(ch_state.pending_note);
+    ch_state.current_hz = hz;
+    ch_state.target_hz = hz;
+    ch_state.portamento_active = false;
+    ch_state.note_slide_active = false;
+    song_write_channel_frequency(m, ch, ch_state);
+    m->chip->key_on(ch);
+    m->channel_active[ch] = true;
+    ch_state.pending_has_note = false;
+    ch_state.wait_for_next_row = false;
+    ch_state.pending_gap = get_min_gap_samples(m->sample_rate);
+}
+
+static void song_start_portamento(xfm_module* m, XfmSongPattern& pat, int ch,
+                                  XfmSongChannel& ch_state, int target_note)
+{
+    double target_hz = note_to_hz(target_note);
+    if (!m->channel_active[ch] || ch_state.current_hz <= 0.0 || ch_state.portamento_speed <= 0) {
+        ch_state.pending_has_note = true;
+        ch_state.pending_note = target_note;
+        ch_state.pending_patch = ch_state.current_patch;
+        ch_state.pending_volume = ch_state.current_volume;
+        ch_state.pending_gap = 0;
+        ch_state.wait_for_next_row = false;
+        return;
+    }
+
+    if (ch_state.current_patch >= 0 && m->current_patch[ch] != ch_state.current_patch) {
+        song_load_channel_patch(m, ch, ch_state.current_patch, ch_state.current_volume);
+    }
+
+    int duration = std::max(1, (pat.samples_per_row * 16) / std::max(1, ch_state.portamento_speed));
+    ch_state.target_hz = target_hz;
+    ch_state.portamento_target_note = target_note;
+    ch_state.portamento_step_hz = (target_hz - ch_state.current_hz) / duration;
+    ch_state.portamento_active = true;
+    ch_state.pending_has_note = false;
+    ch_state.wait_for_next_row = false;
+}
+
+static void song_start_note_slide(XfmSongPattern& pat, XfmSongChannel& ch_state, int packed)
+{
+    if (packed == 0 || ch_state.current_hz <= 0.0) {
+        ch_state.note_slide_active = false;
+        return;
+    }
+
+    int value = std::abs(packed);
+    int speed = (value >> 4) & 0x0F;
+    int semitones = value & 0x0F;
+    if (semitones <= 0) {
+        ch_state.note_slide_active = false;
+        return;
+    }
+
+    double direction = packed > 0 ? 1.0 : -1.0;
+    double target_hz = ch_state.current_hz * std::pow(2.0, direction * semitones / 12.0);
+    int duration = std::max(1, (pat.samples_per_row * 16) / std::max(1, speed));
+    ch_state.note_slide_target_hz = target_hz;
+    ch_state.note_slide_step_hz = (target_hz - ch_state.current_hz) / duration;
+    ch_state.note_slide_active = true;
+    ch_state.portamento_active = false;
+}
+
+static bool song_apply_legato_note(xfm_module* m, int ch, XfmSongChannel& ch_state, int note)
+{
+    if (!m->channel_active[ch] || ch_state.current_hz <= 0.0) return false;
+
+    if (ch_state.current_patch >= 0 && m->current_patch[ch] != ch_state.current_patch) {
+        song_load_channel_patch(m, ch, ch_state.current_patch, ch_state.current_volume);
+    }
+
+    double hz = note_to_hz(note);
+    ch_state.current_hz = hz;
+    ch_state.target_hz = hz;
+    ch_state.portamento_active = false;
+    ch_state.note_slide_active = false;
+    ch_state.portamento_target_note = note;
+    song_write_channel_frequency(m, ch, ch_state);
+    ch_state.pending_has_note = false;
+    ch_state.wait_for_next_row = false;
+    return true;
+}
+
 // Process a row for the active song - called at END of previous row
 // Sets up pending notes. Key-off of previous notes happens at sample 1 of new row.
 static void song_process_row(xfm_module* m, int row_idx)
@@ -984,15 +1490,96 @@ static void song_process_row(xfm_module* m, int row_idx)
         XfmSongChannel& ch_state = song.channels[ch];
 
         // Update instrument and volume if specified
-        if (ev.patch_id >= 0) ch_state.current_patch = ev.patch_id;
-        if (ev.volume >= 0) ch_state.current_volume = ev.volume;
+        if (ev.patch_id >= 0) {
+            ch_state.current_patch = ev.patch_id;
+            m->live_patch_valid[ch] = false;
+            m->live_patch_id[ch] = -1;
+            m->live_op_mask[ch] = 0x0F;
+            ch_state.live_patch_valid = false;
+        }
+        if (ev.volume >= 0) {
+            ch_state.current_volume = ev.volume;
+            ch_state.current_volume_f = ev.volume;
+            if (m->channel_active[ch]) {
+                song_write_channel_tremolo(m, ch, 0);
+            }
+        }
+        if (ev.legato >= 0) ch_state.legato_enabled = ev.legato != 0;
+        if (ev.pitch_slide != SONG_PITCH_SLIDE_NONE) {
+            ch_state.pitch_slide_speed = ev.pitch_slide;
+            ch_state.portamento_active = false;
+            ch_state.note_slide_active = false;
+        }
+        if (ev.portamento >= 0) {
+            ch_state.portamento_speed = ev.portamento;
+            ch_state.pitch_slide_speed = 0;
+            ch_state.note_slide_active = false;
+            if (ev.portamento == 0) {
+                ch_state.portamento_active = false;
+            }
+        }
+        if (ev.vibrato >= 0) {
+            ch_state.vibrato_speed = (ev.vibrato >> 4) & 0x0F;
+            ch_state.vibrato_depth = ev.vibrato & 0x0F;
+            if (ev.vibrato == 0) {
+                ch_state.vibrato_phase = 0.0;
+            }
+        }
+        if (ev.tremolo >= 0) {
+            ch_state.tremolo_speed = (ev.tremolo >> 4) & 0x0F;
+            ch_state.tremolo_depth = ev.tremolo & 0x0F;
+            if (ev.tremolo == 0) {
+                ch_state.tremolo_phase = 0.0;
+                song_write_channel_tremolo(m, ch, 0);
+            }
+        }
+        if (ev.volume_slide != SONG_VOLUME_SLIDE_NONE) {
+            ch_state.volume_slide_speed = ev.volume_slide;
+        }
+        if (ev.note_slide != SONG_NOTE_SLIDE_NONE) {
+            song_start_note_slide(pat, ch_state, ev.note_slide);
+            ch_state.pitch_slide_speed = 0;
+        }
+        if (ev.fine_pitch >= 0) {
+            ch_state.fine_pitch_cents = ev.fine_pitch - 0x80;
+            if (m->channel_active[ch]) {
+                song_write_channel_frequency(m, ch, ch_state);
+            }
+        }
+        if (ev.hard_reset >= 0) {
+            ch_state.envelope_hard_reset = ev.hard_reset != 0;
+        }
+        for (int i = 0; i < ev.opn_effect_count; i++) {
+            song_apply_opn_effect(m, ch, ev.opn_effects[i]);
+        }
 
         if (ev.note == -2) {
-            // OFF note - mark for key off at sample 1
+            // OFF note - stop the channel at this row boundary.
+            if (m->channel_active[ch]) {
+                m->chip->key_off(ch);
+                m->channel_active[ch] = false;
+            }
             ch_state.pending_has_note = false;
-            ch_state.pending_is_off = true;
+            ch_state.pending_is_off = false;
             ch_state.pending_gap = get_min_gap_samples(m->sample_rate);
+            ch_state.portamento_active = false;
+            ch_state.pitch_slide_speed = 0;
+            ch_state.volume_slide_speed = 0;
+            ch_state.note_slide_active = false;
+            ch_state.vibrato_speed = 0;
+            ch_state.vibrato_depth = 0;
+            ch_state.tremolo_speed = 0;
+            ch_state.tremolo_depth = 0;
         } else if (ev.note >= 0) {
+            if (ch_state.portamento_speed > 0 && m->channel_active[ch]) {
+                song_start_portamento(m, pat, ch, ch_state, ev.note);
+                continue;
+            }
+
+            if (ch_state.legato_enabled && song_apply_legato_note(m, ch, ch_state, ev.note)) {
+                continue;
+            }
+
             // New note on this channel
             // Check if channel is still playing from previous row
             bool was_playing = m->channel_active[ch];
@@ -1051,35 +1638,7 @@ static void song_commit_keyon(xfm_module* m, int current_gap)
             continue;
         }
 
-        // Gap elapsed - load patch and key on new note
-        xfm_patch_opn patch = m->patches[ch_state.pending_patch];
-        int tl_add = ((0x7F - ch_state.current_volume) * 127) / 0x7F;
-        bool isCarrier[4] = {false, false, false, false};
-        switch(patch.ALG) {
-            case 0: case 1: case 2: case 3: isCarrier[3] = true; break;
-            case 4: isCarrier[1] = isCarrier[3] = true; break;
-            case 5: case 6: isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
-            case 7: isCarrier[0] = isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
-        }
-        for(int op = 0; op < 4; op++) {
-            if(isCarrier[op]) {
-                patch.op[op].TL = std::min(127, (int)patch.op[op].TL + tl_add);
-            }
-        }
-
-        m->chip->load_patch(patch, ch);
-        m->current_patch[ch] = ch_state.pending_patch;
-        // Re-apply LFO settings after loading patch
-        m->chip->enable_lfo(m->lfo_enable, static_cast<uint8_t>(m->lfo_freq));
-        double hz = 440.0 * std::pow(2.0, (ch_state.pending_note - 69) / 12.0);
-        m->chip->set_frequency(ch, hz, 0);
-        m->chip->key_on(ch);
-        ch_state.current_hz = hz;
-        ch_state.target_hz = hz;
-        ch_state.portamento_active = false;
-        m->channel_active[ch] = true;
-        ch_state.pending_has_note = false;
-        ch_state.pending_gap = get_min_gap_samples(m->sample_rate);
+        song_key_on_channel(m, ch, ch_state);
     }
 }
 
@@ -1097,6 +1656,9 @@ void xfm_song_play(xfm_module* m, xfm_song_id id, bool loop)
         m->chip->key_off(ch);
         m->channel_active[ch] = false;
         m->current_patch[ch] = -1;
+        m->live_patch_valid[ch] = false;
+        m->live_patch_id[ch] = -1;
+        m->live_op_mask[ch] = 0x0F;
     }
 
     // Initialize active song - start at sample 0
@@ -1116,11 +1678,25 @@ void xfm_song_play(xfm_module* m, xfm_song_id id, bool loop)
         m->active_song.channels[ch].pending_gap = get_min_gap_samples(m->sample_rate);
         m->active_song.channels[ch].wait_for_next_row = false;
         m->active_song.channels[ch].legato_enabled = false;
+        m->active_song.channels[ch].pitch_slide_speed = 0;
         m->active_song.channels[ch].portamento_active = false;
+        m->active_song.channels[ch].portamento_speed = 0;
         m->active_song.channels[ch].portamento_target_note = -1;
         m->active_song.channels[ch].current_hz = 0.0;
         m->active_song.channels[ch].target_hz = 0.0;
         m->active_song.channels[ch].portamento_step_hz = 0.0;
+        m->active_song.channels[ch].volume_slide_speed = 0;
+        m->active_song.channels[ch].note_slide_active = false;
+        m->active_song.channels[ch].note_slide_target_hz = 0.0;
+        m->active_song.channels[ch].note_slide_step_hz = 0.0;
+        m->active_song.channels[ch].fine_pitch_cents = 0;
+        m->active_song.channels[ch].vibrato_speed = 0;
+        m->active_song.channels[ch].vibrato_depth = 0;
+        m->active_song.channels[ch].vibrato_phase = 0.0;
+        m->active_song.channels[ch].tremolo_speed = 0;
+        m->active_song.channels[ch].tremolo_depth = 0;
+        m->active_song.channels[ch].tremolo_phase = 0.0;
+        m->active_song.channels[ch].envelope_hard_reset = false;
         m->active_song.channels[ch].live_patch_valid = false;
     }
 
@@ -1284,7 +1860,8 @@ static void update_song(xfm_module* m, int num_samples)
                 XfmSongChannel& ch_state = song.channels[ch];
                 // Key off if channel is active AND there's a new note waiting
                 if (m->channel_active[ch] && ch_state.pending_has_note) {
-                    m->chip->key_off(ch);
+                    if (ch_state.envelope_hard_reset) m->chip->hard_mute(ch);
+                    else m->chip->key_off(ch);
                     m->channel_active[ch] = false;
                 }
             }
@@ -1304,34 +1881,7 @@ static void update_song(xfm_module* m, int num_samples)
             for (int ch = 0; ch < 6; ch++) {
                 XfmSongChannel& ch_state = song.channels[ch];
                 if (ch_state.pending_has_note && ch_state.wait_for_next_row) {
-                    // Load patch and key on
-                    xfm_patch_opn patch = m->patches[ch_state.pending_patch];
-                    int tl_add = ((0x7F - ch_state.current_volume) * 127) / 0x7F;
-                    bool isCarrier[4] = {false, false, false, false};
-                    switch(patch.ALG) {
-                        case 0: case 1: case 2: case 3: isCarrier[3] = true; break;
-                        case 4: isCarrier[1] = isCarrier[3] = true; break;
-                        case 5: case 6: isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
-                        case 7: isCarrier[0] = isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
-                    }
-                    for(int op = 0; op < 4; op++) {
-                        if(isCarrier[op]) {
-                            patch.op[op].TL = std::min(127, (int)patch.op[op].TL + tl_add);
-                        }
-                    }
-                    m->chip->load_patch(patch, ch);
-                    m->current_patch[ch] = ch_state.pending_patch;
-                    m->chip->enable_lfo(m->lfo_enable, static_cast<uint8_t>(m->lfo_freq));
-                    double hz = 440.0 * std::pow(2.0, (ch_state.pending_note - 69) / 12.0);
-                    m->chip->set_frequency(ch, hz, 0);
-                    m->chip->key_on(ch);
-                    ch_state.current_hz = hz;
-                    ch_state.target_hz = hz;
-                    ch_state.portamento_active = false;
-                    m->channel_active[ch] = true;
-                    ch_state.pending_has_note = false;
-                    ch_state.wait_for_next_row = false;
-                    ch_state.pending_gap = get_min_gap_samples(m->sample_rate);
+                    song_key_on_channel(m, ch, ch_state);
                 }
             }
 
@@ -1376,33 +1926,7 @@ static void song_commit_waiting_keyons(xfm_module* m)
         if (ch_state.pending_patch < 0) continue;
         if (!m->patch_present[ch_state.pending_patch]) continue;
 
-        xfm_patch_opn patch = m->patches[ch_state.pending_patch];
-        int tl_add = ((0x7F - ch_state.current_volume) * 127) / 0x7F;
-        bool isCarrier[4] = {false, false, false, false};
-        switch(patch.ALG) {
-            case 0: case 1: case 2: case 3: isCarrier[3] = true; break;
-            case 4: isCarrier[1] = isCarrier[3] = true; break;
-            case 5: case 6: isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
-            case 7: isCarrier[0] = isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
-        }
-        for(int op = 0; op < 4; op++) {
-            if(isCarrier[op]) {
-                patch.op[op].TL = std::min(127, (int)patch.op[op].TL + tl_add);
-            }
-        }
-        m->chip->load_patch(patch, ch);
-        m->current_patch[ch] = ch_state.pending_patch;
-        m->chip->enable_lfo(m->lfo_enable, static_cast<uint8_t>(m->lfo_freq));
-        double hz = 440.0 * std::pow(2.0, (ch_state.pending_note - 69) / 12.0);
-        m->chip->set_frequency(ch, hz, 0);
-        m->chip->key_on(ch);
-        ch_state.current_hz = hz;
-        ch_state.target_hz = hz;
-        ch_state.portamento_active = false;
-        m->channel_active[ch] = true;
-        ch_state.pending_has_note = false;
-        ch_state.wait_for_next_row = false;
-        ch_state.pending_gap = get_min_gap_samples(m->sample_rate);
+        song_key_on_channel(m, ch, ch_state);
     }
 }
 
@@ -1428,7 +1952,8 @@ static bool process_song_events_now(xfm_module* m)
         for (int ch = 0; ch < 6; ch++) {
             XfmSongChannel& ch_state = song.channels[ch];
             if (m->channel_active[ch] && ch_state.pending_has_note) {
-                m->chip->key_off(ch);
+                if (ch_state.envelope_hard_reset) m->chip->hard_mute(ch);
+                else m->chip->key_off(ch);
                 m->channel_active[ch] = false;
                 changed = true;
             }
@@ -1498,6 +2023,21 @@ static int next_song_event_delta(xfm_module* m, int max_frames)
 
     for (int ch = 0; ch < 6; ch++) {
         XfmSongChannel& ch_state = song.channels[ch];
+        if (ch_state.pitch_slide_speed != 0) {
+            next = std::min(next, 64);
+        }
+        if (ch_state.volume_slide_speed != 0) {
+            next = std::min(next, 64);
+        }
+        if (ch_state.portamento_active) {
+            next = std::min(next, 64);
+        }
+        if (ch_state.note_slide_active) {
+            next = std::min(next, 64);
+        }
+        if (ch_state.vibrato_depth > 0 || ch_state.tremolo_depth > 0) {
+            next = std::min(next, 64);
+        }
         if (ch_state.pending_has_note && !ch_state.wait_for_next_row) {
             next = std::min(next, std::max(0, ch_state.pending_gap - song.sample_in_row));
         }
@@ -1505,9 +2045,93 @@ static int next_song_event_delta(xfm_module* m, int max_frames)
     return next;
 }
 
+static void advance_song_portamento(xfm_module* m, int frames)
+{
+    if (!m || !m->chip || !m->active_song.active || frames <= 0) return;
+    if (m->active_song.song_id <= 0 || m->active_song.song_id > 15) return;
+    if (!m->song_present[m->active_song.song_id]) return;
+
+    XfmSongPattern& pat = m->song_patterns[m->active_song.song_id];
+
+    for (int ch = 0; ch < 6; ch++) {
+        XfmSongChannel& ch_state = m->active_song.channels[ch];
+        if (ch_state.pitch_slide_speed != 0 && m->channel_active[ch] && ch_state.current_hz > 0.0) {
+            double cents_per_second = std::abs(ch_state.pitch_slide_speed) * 25.0;
+            double cents = cents_per_second * (double)frames / (double)m->sample_rate;
+            if (ch_state.pitch_slide_speed < 0) cents = -cents;
+            ch_state.current_hz *= std::pow(2.0, cents / 1200.0);
+            ch_state.target_hz = ch_state.current_hz;
+        }
+
+        bool volume_changed = false;
+        if (ch_state.volume_slide_speed != 0 && m->channel_active[ch]) {
+            double delta = (double)ch_state.volume_slide_speed * (double)frames / (double)std::max(1, pat.samples_per_row);
+            ch_state.current_volume_f = std::max(0.0, std::min(127.0, ch_state.current_volume_f + delta));
+            int new_volume = (int)std::round(ch_state.current_volume_f);
+            if (new_volume != ch_state.current_volume) {
+                ch_state.current_volume = new_volume;
+                volume_changed = true;
+            }
+        }
+
+        if (ch_state.portamento_active && m->channel_active[ch]) {
+            double next_hz = ch_state.current_hz + ch_state.portamento_step_hz * frames;
+            bool reached = (ch_state.portamento_step_hz >= 0.0 && next_hz >= ch_state.target_hz) ||
+                           (ch_state.portamento_step_hz < 0.0 && next_hz <= ch_state.target_hz);
+            if (reached || std::abs(ch_state.portamento_step_hz) < 0.000001) {
+                next_hz = ch_state.target_hz;
+                ch_state.portamento_active = false;
+            }
+
+            if (next_hz > 0.0) {
+                ch_state.current_hz = next_hz;
+            }
+        }
+
+        if (ch_state.note_slide_active && m->channel_active[ch]) {
+            double next_hz = ch_state.current_hz + ch_state.note_slide_step_hz * frames;
+            bool reached = (ch_state.note_slide_step_hz >= 0.0 && next_hz >= ch_state.note_slide_target_hz) ||
+                           (ch_state.note_slide_step_hz < 0.0 && next_hz <= ch_state.note_slide_target_hz);
+            if (reached || std::abs(ch_state.note_slide_step_hz) < 0.000001) {
+                next_hz = ch_state.note_slide_target_hz;
+                ch_state.note_slide_active = false;
+            }
+
+            if (next_hz > 0.0) {
+                ch_state.current_hz = next_hz;
+            }
+        }
+
+        if (m->channel_active[ch] && ch_state.current_hz > 0.0) {
+            if (ch_state.vibrato_depth > 0) {
+                double rate_hz = 0.8 + ch_state.vibrato_speed * 0.75;
+                ch_state.vibrato_phase += (2.0 * XFM_PI * rate_hz * frames) / (double)m->sample_rate;
+                if (ch_state.vibrato_phase > 2.0 * XFM_PI) {
+                    ch_state.vibrato_phase = std::fmod(ch_state.vibrato_phase, 2.0 * XFM_PI);
+                }
+            }
+            song_write_channel_frequency(m, ch, ch_state);
+        }
+
+        if (m->channel_active[ch] && ch_state.tremolo_depth > 0) {
+            double rate_hz = 0.8 + ch_state.tremolo_speed * 0.75;
+            ch_state.tremolo_phase += (2.0 * XFM_PI * rate_hz * frames) / (double)m->sample_rate;
+            if (ch_state.tremolo_phase > 2.0 * XFM_PI) {
+                ch_state.tremolo_phase = std::fmod(ch_state.tremolo_phase, 2.0 * XFM_PI);
+            }
+            double bipolar = (std::sin(ch_state.tremolo_phase) + 1.0) * 0.5;
+            int attenuation = (int)std::round(bipolar * ch_state.tremolo_depth * 4.0);
+            song_write_channel_tremolo(m, ch, attenuation);
+        } else if (volume_changed) {
+            song_write_channel_tremolo(m, ch, 0);
+        }
+    }
+}
+
 static void advance_song_time(xfm_module* m, int frames)
 {
     if (m->active_song.active) {
+        advance_song_portamento(m, frames);
         m->active_song.sample_in_row += frames;
     }
 }
