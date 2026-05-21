@@ -161,6 +161,12 @@ private:
     }
 public:
 
+    static uint8_t dt_to_hw(int dt) {
+        if (dt < -3) dt = -3;
+        if (dt > 3) dt = 3;
+        return static_cast<uint8_t>(dt < 0 ? 8 + dt : dt);
+    }
+
     void load_patch(const YM2612Patch& p, int ch)
     {
         // YM2612 slot order in registers: OP1, OP3, OP2, OP4
@@ -175,7 +181,7 @@ public:
             int hwSlot     = slotMap[patchOp];
             const auto& op = p.op[patchOp];
 
-            uint8_t dt_hw = static_cast<uint8_t>((op.DT + 3) & 0x07);
+            uint8_t dt_hw = dt_to_hw(op.DT);
             write(port, 0x30 + hwSlot * 4 + hwch, (dt_hw << 4) | (op.MUL & 0x0F));
             write(port, 0x40 + hwSlot * 4 + hwch, op.TL & 0x7F);
             write(port, 0x50 + hwSlot * 4 + hwch, ((op.RS & 0x03) << 6) | (op.AR & 0x1F));
