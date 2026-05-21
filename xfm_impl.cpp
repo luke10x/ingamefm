@@ -114,6 +114,13 @@ xfm_module* xfm_module_create(int sample_rate, int buffer_frames, xfm_chip_type 
         m->active_sfx[i].pending_gap = get_min_gap_samples(m->sample_rate);
         m->active_sfx[i].auto_off_scheduled = false;
         m->active_sfx[i].auto_off_at_sample = 0;
+        m->active_sfx[i].legato_enabled = false;
+        m->active_sfx[i].portamento_active = false;
+        m->active_sfx[i].portamento_target_note = -1;
+        m->active_sfx[i].current_hz = 0.0;
+        m->active_sfx[i].target_hz = 0.0;
+        m->active_sfx[i].portamento_step_hz = 0.0;
+        m->active_sfx[i].live_patch_valid = false;
         m->active_sfx[i].active = false;
     }
 
@@ -134,6 +141,13 @@ xfm_module* xfm_module_create(int sample_rate, int buffer_frames, xfm_chip_type 
         m->active_song.channels[ch].pending_has_note = false;
         m->active_song.channels[ch].pending_is_off = false;
         m->active_song.channels[ch].wait_for_next_row = false;
+        m->active_song.channels[ch].legato_enabled = false;
+        m->active_song.channels[ch].portamento_active = false;
+        m->active_song.channels[ch].portamento_target_note = -1;
+        m->active_song.channels[ch].current_hz = 0.0;
+        m->active_song.channels[ch].target_hz = 0.0;
+        m->active_song.channels[ch].portamento_step_hz = 0.0;
+        m->active_song.channels[ch].live_patch_valid = false;
     }
 
     // Initialize pending song
@@ -204,6 +218,13 @@ void xfm_module_reset_state(xfm_module* m)
         m->active_sfx[i].pending_note = -1;
         m->active_sfx[i].pending_patch_id = -1;
         m->active_sfx[i].auto_off_scheduled = false;
+        m->active_sfx[i].legato_enabled = false;
+        m->active_sfx[i].portamento_active = false;
+        m->active_sfx[i].portamento_target_note = -1;
+        m->active_sfx[i].current_hz = 0.0;
+        m->active_sfx[i].target_hz = 0.0;
+        m->active_sfx[i].portamento_step_hz = 0.0;
+        m->active_sfx[i].live_patch_valid = false;
     }
     
     // Reset song state
@@ -427,18 +448,22 @@ static void sfx_process_row(xfm_module* m, int voice_idx, int row_idx)
             if (sfx->auto_off_at_sample < 1) sfx->auto_off_at_sample = 1;
         }
 
-        // Look ahead to find next note
-        int next_note_row = find_next_sfx_note_row(pat, row_idx);
-        if (next_note_row >= 0) {
-            // Calculate distance to next note in samples
-            int rows_until_next = next_note_row - row_idx;
-            // Dynamic gap for RR release
-            int gap = get_min_gap_samples(m->sample_rate) + (rows_until_next * pat.samples_per_row * 4 / 10);
-            int max_gap = (250 * m->sample_rate) / 44100;
-            sfx->pending_gap = std::min(max_gap, gap);
+        if (!was_playing) {
+            sfx->pending_gap = 0;
         } else {
-            // No next note - use default gap
-            sfx->pending_gap = get_min_gap_samples(m->sample_rate);
+            // Look ahead to find next note
+            int next_note_row = find_next_sfx_note_row(pat, row_idx);
+            if (next_note_row >= 0) {
+                // Calculate distance to next note in samples
+                int rows_until_next = next_note_row - row_idx;
+                // Dynamic gap for RR release
+                int gap = get_min_gap_samples(m->sample_rate) + (rows_until_next * pat.samples_per_row * 4 / 10);
+                int max_gap = (250 * m->sample_rate) / 44100;
+                sfx->pending_gap = std::min(max_gap, gap);
+            } else {
+                // No next note - use default gap
+                sfx->pending_gap = get_min_gap_samples(m->sample_rate);
+            }
         }
 
         // Mark for key-on after gap
@@ -469,6 +494,9 @@ static void sfx_commit_keyon(xfm_module* m, int voice_idx, int current_gap)
             double hz = 440.0 * std::pow(2.0, (sfx.pending_note - 69) / 12.0);
             m->chip->set_frequency(voice_idx, hz, 0);
             m->chip->key_on(voice_idx);
+            sfx.current_hz = hz;
+            sfx.target_hz = hz;
+            sfx.portamento_active = false;
             m->voices[voice_idx].midi_note = sfx.pending_note;
             m->channel_active[voice_idx] = true;
             sfx.pending_has_note = false;
@@ -488,6 +516,9 @@ static void sfx_commit_keyon(xfm_module* m, int voice_idx, int current_gap)
         double hz = 440.0 * std::pow(2.0, (sfx.pending_note - 69) / 12.0);
         m->chip->set_frequency(voice_idx, hz, 0);
         m->chip->key_on(voice_idx);
+        sfx.current_hz = hz;
+        sfx.target_hz = hz;
+        sfx.portamento_active = false;
         m->voices[voice_idx].midi_note = sfx.pending_note;
         m->channel_active[voice_idx] = true;
         sfx.pending_has_note = false;
@@ -585,6 +616,13 @@ xfm_voice_id xfm_sfx_play(xfm_module* m, xfm_sfx_id id, int priority)
     sfx.active = true;
     sfx.auto_off_scheduled = false;
     sfx.auto_off_at_sample = 0;
+    sfx.legato_enabled = false;
+    sfx.portamento_active = false;
+    sfx.portamento_target_note = -1;
+    sfx.current_hz = 0.0;
+    sfx.target_hz = 0.0;
+    sfx.portamento_step_hz = 0.0;
+    sfx.live_patch_valid = false;
 
     // Update voice state
     m->voices[best_voice].active = true;
@@ -694,6 +732,94 @@ static void update_sfx(xfm_module* m, int num_samples)
     }
 }
 
+static void finish_sfx_voice(xfm_module* m, int slot)
+{
+    XfmActiveSfx& sfx = m->active_sfx[slot];
+    int voice = sfx.voice_idx;
+    if (voice >= 0 && voice < 6) {
+        m->chip->key_off(voice);
+        m->voices[voice].active = false;
+        m->voices[voice].priority = 0;
+        m->voices[voice].sfx_id = -1;
+        m->voices[voice].midi_note = -1;
+        m->voices[voice].patch_id = -1;
+        m->channel_active[voice] = false;
+    }
+    sfx.active = false;
+    sfx.voice_idx = -1;
+    sfx.sfx_id = -1;
+}
+
+static bool process_sfx_events_now(xfm_module* m)
+{
+    bool changed = false;
+    for (int slot = 0; slot < 6; slot++) {
+        XfmActiveSfx& sfx = m->active_sfx[slot];
+        if (!sfx.active || sfx.rows_remaining <= 0) continue;
+        if (sfx.voice_idx < 0 || sfx.voice_idx >= 6) continue;
+
+        XfmSfxPattern& pat = m->sfx_patterns[sfx.sfx_id];
+        int voice = sfx.voice_idx;
+
+        if (sfx.auto_off_scheduled && sfx.sample_in_row >= sfx.auto_off_at_sample) {
+            m->chip->key_off(voice);
+            m->channel_active[voice] = false;
+            sfx.auto_off_scheduled = false;
+            changed = true;
+        }
+
+        if (sfx.pending_has_note && sfx.sample_in_row >= sfx.pending_gap) {
+            sfx_commit_keyon(m, voice, sfx.sample_in_row);
+            changed = true;
+        }
+
+        while (sfx.active && sfx.sample_in_row >= pat.samples_per_row) {
+            sfx.sample_in_row -= pat.samples_per_row;
+            sfx.rows_remaining--;
+            sfx.current_row++;
+            changed = true;
+
+            if (sfx.rows_remaining <= 0) {
+                finish_sfx_voice(m, slot);
+                break;
+            }
+
+            if (sfx.current_row < pat.num_rows) {
+                sfx_process_row(m, voice, sfx.current_row);
+            }
+        }
+    }
+    return changed;
+}
+
+static int next_sfx_event_delta(xfm_module* m, int max_frames)
+{
+    int next = max_frames;
+    for (int slot = 0; slot < 6; slot++) {
+        XfmActiveSfx& sfx = m->active_sfx[slot];
+        if (!sfx.active || sfx.rows_remaining <= 0) continue;
+        if (sfx.voice_idx < 0 || sfx.voice_idx >= 6) continue;
+
+        XfmSfxPattern& pat = m->sfx_patterns[sfx.sfx_id];
+        if (sfx.pending_has_note) {
+            next = std::min(next, std::max(0, sfx.pending_gap - sfx.sample_in_row));
+        }
+        if (sfx.auto_off_scheduled) {
+            next = std::min(next, std::max(0, sfx.auto_off_at_sample - sfx.sample_in_row));
+        }
+        next = std::min(next, std::max(0, pat.samples_per_row - sfx.sample_in_row));
+    }
+    return next;
+}
+
+static void advance_sfx_time(xfm_module* m, int frames)
+{
+    for (int slot = 0; slot < 6; slot++) {
+        XfmActiveSfx& sfx = m->active_sfx[slot];
+        if (sfx.active) sfx.sample_in_row += frames;
+    }
+}
+
 // =============================================================================
 // SONG PATTERN PARSER (multi-channel)
 // =============================================================================
@@ -738,11 +864,6 @@ xfm_song_id xfm_song_declare(xfm_module* m, xfm_song_id id, const char* pattern_
     
     // Allocate and parse song
     XfmSongPattern& song = m->song_patterns[id];
-    song.num_rows = num_rows;
-    song.num_channels = num_channels;
-    song.tick_rate = tick_rate;
-    song.speed = speed;
-    song.samples_per_row = (int)((double)m->sample_rate / tick_rate * speed);
 
     // Free existing rows if any
     if (song.rows) {
@@ -750,7 +871,14 @@ xfm_song_id xfm_song_declare(xfm_module* m, xfm_song_id id, const char* pattern_
             if (song.rows[r]) delete[] song.rows[r];
         }
         delete[] song.rows;
+        song.rows = nullptr;
     }
+
+    song.num_rows = num_rows;
+    song.num_channels = num_channels;
+    song.tick_rate = tick_rate;
+    song.speed = speed;
+    song.samples_per_row = (int)((double)m->sample_rate / tick_rate * speed);
 
     song.rows = new XfmSongEvent*[num_rows];
     for (int r = 0; r < num_rows; r++) {
@@ -873,15 +1001,19 @@ static void song_process_row(xfm_module* m, int row_idx)
             // The new note will wait until end of this row (simulates manual OFF row)
             ch_state.wait_for_next_row = was_playing;
 
-            // Look ahead to find next note on this channel
-            int next_note_row = find_next_note_row(pat, row_idx, ch);
-
-            // Calculate gap for clean release
-            if (next_note_row >= 0) {
-                int rows_until_next = next_note_row - row_idx;
-                ch_state.pending_gap = get_dynamic_gap(m->sample_rate, rows_until_next, pat.samples_per_row);
+            if (!was_playing) {
+                ch_state.pending_gap = 0;
             } else {
-                ch_state.pending_gap = get_min_gap_samples(m->sample_rate);
+                // Look ahead to find next note on this channel
+                int next_note_row = find_next_note_row(pat, row_idx, ch);
+
+                // Calculate gap for clean release
+                if (next_note_row >= 0) {
+                    int rows_until_next = next_note_row - row_idx;
+                    ch_state.pending_gap = get_dynamic_gap(m->sample_rate, rows_until_next, pat.samples_per_row);
+                } else {
+                    ch_state.pending_gap = get_min_gap_samples(m->sample_rate);
+                }
             }
 
             // Mark for key-on after gap (or at end of row if waiting)
@@ -942,6 +1074,9 @@ static void song_commit_keyon(xfm_module* m, int current_gap)
         double hz = 440.0 * std::pow(2.0, (ch_state.pending_note - 69) / 12.0);
         m->chip->set_frequency(ch, hz, 0);
         m->chip->key_on(ch);
+        ch_state.current_hz = hz;
+        ch_state.target_hz = hz;
+        ch_state.portamento_active = false;
         m->channel_active[ch] = true;
         ch_state.pending_has_note = false;
         ch_state.pending_gap = get_min_gap_samples(m->sample_rate);
@@ -980,6 +1115,13 @@ void xfm_song_play(xfm_module* m, xfm_song_id id, bool loop)
         m->active_song.channels[ch].pending_is_off = false;
         m->active_song.channels[ch].pending_gap = get_min_gap_samples(m->sample_rate);
         m->active_song.channels[ch].wait_for_next_row = false;
+        m->active_song.channels[ch].legato_enabled = false;
+        m->active_song.channels[ch].portamento_active = false;
+        m->active_song.channels[ch].portamento_target_note = -1;
+        m->active_song.channels[ch].current_hz = 0.0;
+        m->active_song.channels[ch].target_hz = 0.0;
+        m->active_song.channels[ch].portamento_step_hz = 0.0;
+        m->active_song.channels[ch].live_patch_valid = false;
     }
 
     // Process first row (sets up pending notes - will be triggered in update_song)
@@ -1183,6 +1325,9 @@ static void update_song(xfm_module* m, int num_samples)
                     double hz = 440.0 * std::pow(2.0, (ch_state.pending_note - 69) / 12.0);
                     m->chip->set_frequency(ch, hz, 0);
                     m->chip->key_on(ch);
+                    ch_state.current_hz = hz;
+                    ch_state.target_hz = hz;
+                    ch_state.portamento_active = false;
                     m->channel_active[ch] = true;
                     ch_state.pending_has_note = false;
                     ch_state.wait_for_next_row = false;
@@ -1220,6 +1365,150 @@ static void update_song(xfm_module* m, int num_samples)
                 song_process_row(m, song.current_row);
             }
         }
+    }
+}
+
+static void song_commit_waiting_keyons(xfm_module* m)
+{
+    for (int ch = 0; ch < 6; ch++) {
+        XfmSongChannel& ch_state = m->active_song.channels[ch];
+        if (!ch_state.pending_has_note || !ch_state.wait_for_next_row) continue;
+        if (ch_state.pending_patch < 0) continue;
+        if (!m->patch_present[ch_state.pending_patch]) continue;
+
+        xfm_patch_opn patch = m->patches[ch_state.pending_patch];
+        int tl_add = ((0x7F - ch_state.current_volume) * 127) / 0x7F;
+        bool isCarrier[4] = {false, false, false, false};
+        switch(patch.ALG) {
+            case 0: case 1: case 2: case 3: isCarrier[3] = true; break;
+            case 4: isCarrier[1] = isCarrier[3] = true; break;
+            case 5: case 6: isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
+            case 7: isCarrier[0] = isCarrier[1] = isCarrier[2] = isCarrier[3] = true; break;
+        }
+        for(int op = 0; op < 4; op++) {
+            if(isCarrier[op]) {
+                patch.op[op].TL = std::min(127, (int)patch.op[op].TL + tl_add);
+            }
+        }
+        m->chip->load_patch(patch, ch);
+        m->current_patch[ch] = ch_state.pending_patch;
+        m->chip->enable_lfo(m->lfo_enable, static_cast<uint8_t>(m->lfo_freq));
+        double hz = 440.0 * std::pow(2.0, (ch_state.pending_note - 69) / 12.0);
+        m->chip->set_frequency(ch, hz, 0);
+        m->chip->key_on(ch);
+        ch_state.current_hz = hz;
+        ch_state.target_hz = hz;
+        ch_state.portamento_active = false;
+        m->channel_active[ch] = true;
+        ch_state.pending_has_note = false;
+        ch_state.wait_for_next_row = false;
+        ch_state.pending_gap = get_min_gap_samples(m->sample_rate);
+    }
+}
+
+static bool process_song_events_now(xfm_module* m)
+{
+    XfmActiveSong& song = m->active_song;
+    if (!song.active) return false;
+    if (song.song_id <= 0 || song.song_id > 15) return false;
+    if (!m->song_present[song.song_id]) return false;
+
+    if (m->pending_song.pending && m->pending_song.timing == FM_SONG_SWITCH_NOW) {
+        xfm_song_play(m, m->pending_song.song_id, song.loop);
+        m->pending_song.pending = false;
+        return true;
+    }
+
+    XfmSongPattern& pat = m->song_patterns[song.song_id];
+    bool changed = false;
+
+    int off_sample = (int)(pat.samples_per_row * m->auto_off_delay);
+    if (off_sample < 1) off_sample = 1;
+    if (song.sample_in_row == off_sample) {
+        for (int ch = 0; ch < 6; ch++) {
+            XfmSongChannel& ch_state = song.channels[ch];
+            if (m->channel_active[ch] && ch_state.pending_has_note) {
+                m->chip->key_off(ch);
+                m->channel_active[ch] = false;
+                changed = true;
+            }
+        }
+    }
+
+    song_commit_keyon(m, song.sample_in_row);
+
+    while (song.active && song.sample_in_row >= pat.samples_per_row) {
+        song.sample_in_row -= pat.samples_per_row;
+        song.current_row++;
+        changed = true;
+
+        song_commit_waiting_keyons(m);
+
+        if (m->pending_song.pending && m->pending_song.timing == FM_SONG_SWITCH_ROW) {
+            xfm_song_play(m, m->pending_song.song_id, song.loop);
+            m->pending_song.pending = false;
+            return true;
+        }
+
+        if (song.current_row >= pat.num_rows) {
+            if (song.loop) {
+                song.current_row = 0;
+                song.rows_remaining = pat.num_rows;
+            } else {
+                for (int ch = 0; ch < 6; ch++) {
+                    m->chip->key_off(ch);
+                    m->channel_active[ch] = false;
+                }
+                song.active = false;
+                song.song_id = 0;
+                m->pending_song.pending = false;
+                return true;
+            }
+        }
+
+        if (song.current_row < pat.num_rows) {
+            song_process_row(m, song.current_row);
+        }
+    }
+
+    return changed;
+}
+
+static int next_song_event_delta(xfm_module* m, int max_frames)
+{
+    XfmActiveSong& song = m->active_song;
+    if (!song.active) return max_frames;
+    if (song.song_id <= 0 || song.song_id > 15) return max_frames;
+    if (!m->song_present[song.song_id]) return max_frames;
+    if (m->pending_song.pending && m->pending_song.timing == FM_SONG_SWITCH_NOW) return 0;
+
+    XfmSongPattern& pat = m->song_patterns[song.song_id];
+    int next = std::min(max_frames, std::max(0, pat.samples_per_row - song.sample_in_row));
+
+    int off_sample = (int)(pat.samples_per_row * m->auto_off_delay);
+    if (off_sample < 1) off_sample = 1;
+    if (song.sample_in_row <= off_sample) {
+        for (int ch = 0; ch < 6; ch++) {
+            if (m->channel_active[ch] && song.channels[ch].pending_has_note) {
+                next = std::min(next, std::max(0, off_sample - song.sample_in_row));
+                break;
+            }
+        }
+    }
+
+    for (int ch = 0; ch < 6; ch++) {
+        XfmSongChannel& ch_state = song.channels[ch];
+        if (ch_state.pending_has_note && !ch_state.wait_for_next_row) {
+            next = std::min(next, std::max(0, ch_state.pending_gap - song.sample_in_row));
+        }
+    }
+    return next;
+}
+
+static void advance_song_time(xfm_module* m, int frames)
+{
+    if (m->active_song.active) {
+        m->active_song.sample_in_row += frames;
     }
 }
 
@@ -1327,11 +1616,20 @@ void xfm_mix_song(xfm_module* m, int16_t* stream, int frames)
         return;
     }
 
-    // Update song only
-    update_song(m, frames);
+    int offset = 0;
+    while (offset < frames) {
+        for (int guard = 0; guard < 16 && process_song_events_now(m); guard++) {}
 
-    // Generate from chip using Bresenham for correct pitch
-    m->chip->generate_buffer(stream, frames, m->sample_rate);
+        int chunk = next_song_event_delta(m, frames - offset);
+        if (chunk <= 0) chunk = 1;
+        if (chunk > frames - offset) chunk = frames - offset;
+
+        m->chip->generate_buffer(stream + offset * 2, chunk, m->sample_rate);
+        advance_song_time(m, chunk);
+        offset += chunk;
+    }
+
+    for (int guard = 0; guard < 16 && process_song_events_now(m); guard++) {}
 
     // // Apply volume
     float vol = m->volume;
@@ -1359,11 +1657,20 @@ void xfm_mix_sfx(xfm_module* m, int16_t* stream, int frames)
         return;
     }
 
-    // Update SFX only
-    update_sfx(m, frames);
+    int offset = 0;
+    while (offset < frames) {
+        for (int guard = 0; guard < 16 && process_sfx_events_now(m); guard++) {}
 
-    // Generate from chip using Bresenham for correct pitch
-    m->chip->generate_buffer(stream, frames, m->sample_rate);
+        int chunk = next_sfx_event_delta(m, frames - offset);
+        if (chunk <= 0) chunk = 1;
+        if (chunk > frames - offset) chunk = frames - offset;
+
+        m->chip->generate_buffer(stream + offset * 2, chunk, m->sample_rate);
+        advance_sfx_time(m, chunk);
+        offset += chunk;
+    }
+
+    for (int guard = 0; guard < 16 && process_sfx_events_now(m); guard++) {}
 
     // Apply volume
     float vol = m->volume;

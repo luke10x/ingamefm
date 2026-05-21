@@ -2,7 +2,7 @@
 // xfm_textplayer.cpp — Console-based FM text file player with hot-reloading
 // =============================================================================
 //
-// Usage: xfm_textplayer <song.txt> <ticks_per_second> <ticks_per_row>
+// Usage: xfm_textplayer <song.txt> <ticks_per_second> <ticks_per_row> [--from-marker]
 //
 // Features:
 //   - Loads patches from patch_XX.h files in current directory
@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <algorithm>
+#include <cctype>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -39,6 +40,7 @@ static constexpr int SAMPLE_RATE = 44100;
 static constexpr int BUFFER_FRAMES = 256;
 static constexpr int MAX_PATCHES = 256;
 static constexpr int MAX_BACKOFF = 32;  // seconds
+static constexpr int SONG_ID = 1;
 
 // =============================================================================
 // Global State
@@ -52,6 +54,8 @@ struct GlobalState {
     bool running = true;
     bool playing = false;
     bool has_errors = false;
+    bool play_from_last_marker = false;
+    bool verbose = false;
     
     // File tracking
     std::map<int, std::string> patch_files;  // patch_id -> filename
@@ -97,6 +101,30 @@ static std::string trim(const std::string& s) {
     return s.substr(start, end - start + 1);
 }
 
+static bool is_comment_line(const std::string& trimmed) {
+    return trimmed.substr(0, 2) == "--" ||
+           trimmed[0] == ';';
+}
+
+static std::string strip_inline_comment(const std::string& line) {
+    size_t comment_pos = std::string::npos;
+    size_t dash_pos = line.find("--");
+    size_t semicolon_pos = line.find(';');
+
+    if (dash_pos != std::string::npos) {
+        comment_pos = dash_pos;
+    }
+    if (semicolon_pos != std::string::npos &&
+        (comment_pos == std::string::npos || semicolon_pos < comment_pos)) {
+        comment_pos = semicolon_pos;
+    }
+
+    if (comment_pos == std::string::npos) {
+        return line;
+    }
+    return line.substr(0, comment_pos);
+}
+
 static void print_error(const std::string& msg) {
     std::cerr << "\033[31m[ERROR]\033[0m " << msg << std::endl;
 }
@@ -106,15 +134,147 @@ static void print_warning(const std::string& msg) {
 }
 
 static void print_info(const std::string& msg) {
+    if (!g_state.verbose) return;
     std::cout << "\033[36m[INFO]\033[0m " << msg << std::endl;
 }
 
 static void print_success(const std::string& msg) {
+    if (!g_state.verbose) return;
     std::cout << "\033[32m[OK]\033[0m " << msg << std::endl;
 }
 
 static void print_playing(const std::string& msg) {
+    if (!g_state.verbose) return;
     std::cout << "\033[35m[PLAY]\033[0m " << msg << std::endl;
+}
+
+static std::string patch_filename_for_id(int patch_id) {
+    char filename[64];
+    snprintf(filename, sizeof(filename), "patch_%02X.h", patch_id & 0xFF);
+    return filename;
+}
+
+static std::string lowercase(std::string s) {
+    for (char& c : s) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return s;
+}
+
+static std::string find_patch_filename_for_id(int patch_id) {
+    std::string upper = patch_filename_for_id(patch_id);
+    if (get_file_mtime(upper) > 0) return upper;
+
+    std::string lower = lowercase(upper);
+    if (get_file_mtime(lower) > 0) return lower;
+
+    return upper;
+}
+
+static void collect_required_patches_from_row(const std::string& row, std::set<int>& required_patches) {
+    size_t start = 0;
+    while (start <= row.size()) {
+        size_t end = row.find('|', start);
+        std::string channel = trim(row.substr(start, end == std::string::npos ? std::string::npos : end - start));
+
+        if (channel.size() >= 5) {
+            std::string inst_str = channel.substr(3, 2);
+            if (inst_str != ".." && inst_str != "  ") {
+                try {
+                    int inst = std::stoi(inst_str, nullptr, 16);
+                    if (inst >= 0 && inst < MAX_PATCHES) {
+                        required_patches.insert(inst);
+                    }
+                } catch (...) {
+                    // Invalid instruments are ignored here; xfm parser will
+                    // treat them as absent, and missing valid patch IDs are
+                    // reported after the full scan.
+                }
+            }
+        }
+
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+}
+
+static std::vector<std::string> split_row_channels(const std::string& row) {
+    std::vector<std::string> channels;
+    size_t start = 0;
+    while (start <= row.size()) {
+        size_t end = row.find('|', start);
+        channels.push_back(row.substr(start, end == std::string::npos ? std::string::npos : end - start));
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return channels;
+}
+
+static std::string join_row_channels(const std::vector<std::string>& channels) {
+    std::string row;
+    for (size_t i = 0; i < channels.size(); i++) {
+        if (i > 0) row += "|";
+        row += channels[i];
+    }
+    return row;
+}
+
+static bool channel_has_note_start(const std::string& channel) {
+    if (channel.size() < 3 || channel[0] == '.') return false;
+    std::string note = channel.substr(0, 3);
+    return note != "OFF" && note != "REL";
+}
+
+static bool channel_has_explicit_inst(const std::string& channel) {
+    return channel.size() >= 5 && channel[3] != '.' && channel[4] != '.';
+}
+
+static bool channel_has_explicit_vol(const std::string& channel) {
+    return channel.size() >= 7 && channel[5] != '.' && channel[6] != '.';
+}
+
+static void update_channel_context(const std::string& row,
+                                   std::vector<std::string>& last_inst,
+                                   std::vector<std::string>& last_vol) {
+    std::vector<std::string> channels = split_row_channels(row);
+    if (channels.size() > last_inst.size()) {
+        last_inst.resize(channels.size());
+        last_vol.resize(channels.size());
+    }
+
+    for (size_t ch = 0; ch < channels.size(); ch++) {
+        const std::string& channel = channels[ch];
+        if (channel_has_explicit_inst(channel)) {
+            last_inst[ch] = channel.substr(3, 2);
+        }
+        if (channel_has_explicit_vol(channel)) {
+            last_vol[ch] = channel.substr(5, 2);
+        }
+    }
+}
+
+static std::string seed_marker_row_context(const std::string& row,
+                                           const std::vector<std::string>& last_inst,
+                                           const std::vector<std::string>& last_vol) {
+    std::vector<std::string> channels = split_row_channels(row);
+    for (size_t ch = 0; ch < channels.size(); ch++) {
+        std::string& channel = channels[ch];
+        if (!channel_has_note_start(channel)) continue;
+
+        if (channel.size() < 7) {
+            channel.resize(7, '.');
+        }
+
+        if (!channel_has_explicit_inst(channel) && ch < last_inst.size() && !last_inst[ch].empty()) {
+            channel[3] = last_inst[ch][0];
+            channel[4] = last_inst[ch][1];
+        }
+        if (!channel_has_explicit_vol(channel) && ch < last_vol.size() && !last_vol[ch].empty()) {
+            channel[5] = last_vol[ch][0];
+            channel[6] = last_vol[ch][1];
+        }
+    }
+    return join_row_channels(channels);
 }
 
 // =============================================================================
@@ -311,6 +471,8 @@ static bool parse_song_file(const std::string& filename, std::string& pattern,
     int begin_line = 0;
     int end_line = 0;
 
+    std::vector<std::string> source_lines;
+
     while (std::getline(file, line)) {
         line_num++;
 
@@ -319,9 +481,78 @@ static bool parse_song_file(const std::string& filename, std::string& pattern,
             line.pop_back();
         }
 
-        // Check for full-line comments (-- at start or only whitespace before --)
+        source_lines.push_back(line);
+    }
+
+    file.close();
+
+    int first_source_line = 0;
+    int last_source_line = (int)source_lines.size();
+    std::vector<std::string> marker_last_inst;
+    std::vector<std::string> marker_last_vol;
+    if (g_state.play_from_last_marker) {
+        int marker_line = -1;
+        for (int i = 0; i < (int)source_lines.size(); i++) {
+            std::string trimmed = trim(source_lines[i]);
+            if (!trimmed.empty() && trimmed[0] == '>') {
+                marker_line = i;
+            }
+        }
+
+        if (marker_line < 0) {
+            errors.push_back({ "No marker line found (expected a line starting with '>')", 0});
+            return false;
+        }
+
+        first_source_line = marker_line + 1;
+        last_source_line = (int)source_lines.size();
+        for (int i = first_source_line; i < (int)source_lines.size(); i++) {
+            if (trim(source_lines[i]).empty()) {
+                last_source_line = i;
+                break;
+            }
+        }
+
+        bool context_in_song = false;
+        bool context_has_begin = false;
+        for (int source_idx = 0; source_idx < first_source_line; source_idx++) {
+            line = source_lines[source_idx];
+            std::string trimmed = trim(line);
+            if (trimmed.empty() || is_comment_line(trimmed) || trimmed[0] == '>') {
+                continue;
+            }
+            if (trimmed == "BEGIN") {
+                context_has_begin = true;
+                context_in_song = true;
+                continue;
+            }
+            if (trimmed == "END") {
+                context_in_song = false;
+                continue;
+            }
+            if (!context_has_begin) {
+                context_in_song = true;
+            }
+            if (!context_in_song) {
+                continue;
+            }
+
+            line = strip_inline_comment(line);
+            trimmed = trim(line);
+            if (!trimmed.empty()) {
+                update_channel_context(trimmed, marker_last_inst, marker_last_vol);
+            }
+        }
+    }
+
+    line_num = 0;
+    for (int source_idx = first_source_line; source_idx < last_source_line; source_idx++) {
+        line = source_lines[source_idx];
+        line_num = source_idx + 1;
+
+        // Check for full-line comments.
         std::string trimmed = trim(line);
-        if (trimmed.empty() || trimmed.substr(0, 2) == "--") {
+        if (trimmed.empty() || is_comment_line(trimmed) || trimmed[0] == '>') {
             continue;
         }
 
@@ -357,44 +588,27 @@ static bool parse_song_file(const std::string& filename, std::string& pattern,
         }
 
         if (in_song) {
-            // Remove inline comments (everything after --)
-            size_t comment_pos = line.find("--");
-            if (comment_pos != std::string::npos) {
-                line = line.substr(0, comment_pos);
-            }
+            line = strip_inline_comment(line);
 
             trimmed = trim(line);
             if (!trimmed.empty()) {
+                if (g_state.play_from_last_marker) {
+                    trimmed = seed_marker_row_context(trimmed, marker_last_inst, marker_last_vol);
+                    update_channel_context(trimmed, marker_last_inst, marker_last_vol);
+                }
                 lines.push_back(trimmed);
 
-                // Parse instrument from line (format: NOTE INST VOL or NOTE INST)
-                // Instrument is 2 hex chars after the note (positions 3-4)
-                // Note format: C-4, E-4, OFF, etc (3 chars)
-                if (trimmed.length() >= 5) {
-                    std::string inst_str = trimmed.substr(3, 2);
-                    if (inst_str != ".." && inst_str != "  " && inst_str != "..") {
-                        try {
-                            int inst = std::stoi(inst_str, nullptr, 16);
-                            if (inst >= 0 && inst < MAX_PATCHES) {
-                                required_patches.insert(inst);
-                            }
-                        } catch (...) {
-                            // Ignore invalid instrument numbers
-                        }
-                    }
-                }
+                collect_required_patches_from_row(trimmed, required_patches);
             }
         }
     }
-
-    file.close();
 
     if (lines.empty()) {
         errors.push_back({ "No song data found (file may be empty or only comments)", 0});
         return false;
     }
 
-    // Build pattern string for xfm_sfx_declare
+    // Build pattern string for xfm_song_declare
     num_rows = lines.size();
     pattern = std::to_string(num_rows) + "\n";
     for (const auto& l : lines) {
@@ -412,9 +626,7 @@ static bool parse_song_file(const std::string& filename, std::string& pattern,
 static void scan_patch_files() {
     // Look for patch_XX.h files in current directory
     for (int i = 0; i < MAX_PATCHES; i++) {
-        char filename[64];
-        snprintf(filename, sizeof(filename), "patch_%02d.h", i);
-        
+        std::string filename = find_patch_filename_for_id(i);
         time_t mtime = get_file_mtime(filename);
         if (mtime > 0) {
             g_state.patch_files[i] = filename;
@@ -469,8 +681,7 @@ static bool validate_and_load() {
     // Check for missing patches
     for (int patch_id : g_state.required_patches) {
         if (g_state.patches.find(patch_id) == g_state.patches.end()) {
-            print_error("Missing patch " + std::to_string(patch_id) + 
-                       " (file: patch_" + std::to_string(patch_id) + ".h)");
+            print_error("Missing patch " + patch_filename_for_id(patch_id));
             g_state.has_errors = true;
         }
     }
@@ -506,15 +717,26 @@ static bool validate_and_load() {
     g_state.last_error_time = 0;
     g_state.next_retry_time = 0;
     
+    g_state.song_mtime = get_file_mtime(g_state.song_filename);
+
+    SDL_LockAudioDevice(g_audio_dev);
+
     // Load patches into FM module
     for (auto& kv : g_state.patches) {
         xfm_patch_set(g_state.music_module, kv.first, &kv.second, 
                      sizeof(xfm_patch_opn), XFM_CHIP_YM2612);
     }
     
-    // Declare song as SFX pattern (single channel)
-    xfm_sfx_declare(g_state.music_module, 1, g_state.song_pattern.c_str(),
-                   g_state.ticks_per_second, g_state.ticks_per_row);
+    xfm_song_id song_id = xfm_song_declare(g_state.music_module, SONG_ID, g_state.song_pattern.c_str(),
+                                           g_state.ticks_per_second, g_state.ticks_per_row);
+
+    SDL_UnlockAudioDevice(g_audio_dev);
+
+    if (song_id != SONG_ID) {
+        print_error("Failed to declare song pattern");
+        g_state.has_errors = true;
+        return false;
+    }
     
     print_success("All files loaded successfully!");
     print_info("Song: " + std::to_string(g_state.song_num_rows) + " rows");
@@ -547,8 +769,7 @@ static bool check_files_changed() {
     
     // Check for new patch files
     for (int i = 0; i < MAX_PATCHES; i++) {
-        char filename[64];
-        snprintf(filename, sizeof(filename), "patch_%02d.h", i);
+        std::string filename = find_patch_filename_for_id(i);
         time_t mtime = get_file_mtime(filename);
         
         if (mtime > 0 && g_state.patch_files.find(i) == g_state.patch_files.end()) {
@@ -570,7 +791,7 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
     int frames = len / 4;  // stereo int16
     
     // Mix audio from module
-    xfm_mix_sfx(g_state.music_module, buffer, frames);
+    xfm_mix_song(g_state.music_module, buffer, frames);
 }
 
 // =============================================================================
@@ -578,11 +799,11 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
 // =============================================================================
 
 static void start_playback() {
-    // Stop any previous playback
-    xfm_sfx_play(g_state.music_module, 0, 0);  // Dummy to reset
-    
-    // Start playing SFX (we use SFX system for single-channel playback)
-    xfm_sfx_play(g_state.music_module, 1, 5);
+    SDL_LockAudioDevice(g_audio_dev);
+    xfm_module_reset_state(g_state.music_module);
+    xfm_song_play(g_state.music_module, SONG_ID, true);
+    SDL_UnlockAudioDevice(g_audio_dev);
+
     g_state.playing = true;
     g_state.last_played_row = -1;
     
@@ -590,6 +811,10 @@ static void start_playback() {
 }
 
 static void stop_playback() {
+    SDL_LockAudioDevice(g_audio_dev);
+    xfm_module_reset_state(g_state.music_module);
+    SDL_UnlockAudioDevice(g_audio_dev);
+
     g_state.playing = false;
 }
 
@@ -598,21 +823,24 @@ static void stop_playback() {
 // =============================================================================
 
 static void print_usage(const char* prog) {
-    std::cerr << "Usage: " << prog << " <song.txt> <ticks_per_second> <ticks_per_row>" << std::endl;
+    std::cerr << "Usage: " << prog << " <song.txt> <ticks_per_second> <ticks_per_row> [--from-marker] [-v]" << std::endl;
     std::cerr << std::endl;
     std::cerr << "  song.txt          - Song file in Furnace-like format" << std::endl;
     std::cerr << "  ticks_per_second  - Number of ticks per second (e.g., 60)" << std::endl;
     std::cerr << "  ticks_per_row     - Number of ticks per row (e.g., 6)" << std::endl;
+    std::cerr << "  --from-marker     - Play rows after the last line beginning with '>'" << std::endl;
+    std::cerr << "                      Stops at the next blank line or EOF/END" << std::endl;
+    std::cerr << "  -v, --verbose     - Print load details and the currently playing row" << std::endl;
     std::cerr << std::endl;
     std::cerr << "Controls:" << std::endl;
     std::cerr << "  Ctrl+X - Exit" << std::endl;
     std::cerr << std::endl;
     std::cerr << "Patch files should be named patch_XX.h in current directory." << std::endl;
-    std::cerr << "Song file supports BEGIN/END tags and -- comments." << std::endl;
+    std::cerr << "Song file supports BEGIN/END tags, --/; comments, and > markers." << std::endl;
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 4) {
+    if (argc < 4) {
         print_usage(argv[0]);
         return 1;
     }
@@ -620,6 +848,19 @@ int main(int argc, char* argv[]) {
     g_state.song_filename = argv[1];
     g_state.ticks_per_second = std::atoi(argv[2]);
     g_state.ticks_per_row = std::atoi(argv[3]);
+
+    for (int i = 4; i < argc; i++) {
+        std::string flag = argv[i];
+        if (flag == "--from-marker" || flag == "--marker" || flag == "-m") {
+            g_state.play_from_last_marker = true;
+        } else if (flag == "--verbose" || flag == "-v") {
+            g_state.verbose = true;
+        } else {
+            print_error("Unknown flag: " + flag);
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
     
     if (g_state.ticks_per_second <= 0 || g_state.ticks_per_row <= 0) {
         print_error("Invalid tick rate or speed values");
@@ -632,15 +873,20 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    std::cout << "========================================" << std::endl;
-    std::cout << "  FM Text Player" << std::endl;
-    std::cout << "========================================" << std::endl;
-    std::cout << "Song: " << g_state.song_filename << std::endl;
-    std::cout << "Tick rate: " << g_state.ticks_per_second << " Hz" << std::endl;
-    std::cout << "Speed: " << g_state.ticks_per_row << " ticks/row" << std::endl;
-    std::cout << "Press Ctrl+X to exit" << std::endl;
-    std::cout << "========================================" << std::endl;
-    std::cout << std::endl;
+    if (g_state.verbose) {
+        std::cout << "========================================" << std::endl;
+        std::cout << "  FM Text Player" << std::endl;
+        std::cout << "========================================" << std::endl;
+        std::cout << "Song: " << g_state.song_filename << std::endl;
+        std::cout << "Tick rate: " << g_state.ticks_per_second << " Hz" << std::endl;
+        std::cout << "Speed: " << g_state.ticks_per_row << " ticks/row" << std::endl;
+        if (g_state.play_from_last_marker) {
+            std::cout << "Range: after last > marker" << std::endl;
+        }
+        std::cout << "Press Ctrl+X to exit" << std::endl;
+        std::cout << "========================================" << std::endl;
+        std::cout << std::endl;
+    }
     
     // Initialize SDL
     if (SDL_Init(SDL_INIT_AUDIO) < 0) {
@@ -681,7 +927,7 @@ int main(int argc, char* argv[]) {
     
     // Main loop
     Uint32 last_row_check = 0;
-    int prev_sfx_row = -1;
+    int prev_song_row = -1;
     
     while (g_state.running) {
         // Handle SDL events
@@ -695,7 +941,9 @@ int main(int argc, char* argv[]) {
         // Check for Ctrl+X
         const Uint8* keystate = SDL_GetKeyboardState(nullptr);
         if (keystate[SDL_SCANCODE_X] && (keystate[SDL_SCANCODE_LCTRL] || keystate[SDL_SCANCODE_RCTRL])) {
-            std::cout << "\nExiting..." << std::endl;
+            if (g_state.verbose) {
+                std::cout << "\nExiting..." << std::endl;
+            }
             g_state.running = false;
             break;
         }
@@ -712,15 +960,18 @@ int main(int argc, char* argv[]) {
             }
         }
         
-        // Check for file changes when not playing or after errors
-        if (!g_state.playing || g_state.has_errors) {
-            if (check_files_changed()) {
-                std::cout << "\n\033[33mFiles changed, reloading...\033[0m" << std::endl;
-                loaded = validate_and_load();
-                
-                if (loaded && !g_state.playing) {
-                    start_playback();
-                }
+        // Check for file changes and hot-reload the full song.
+        if (check_files_changed()) {
+            std::cout << "\n\033[33mFiles changed, reloading...\033[0m" << std::endl;
+            bool was_playing = g_state.playing;
+            if (was_playing) {
+                stop_playback();
+            }
+            loaded = validate_and_load();
+
+            if (loaded && was_playing) {
+                start_playback();
+                prev_song_row = -1;
             }
         }
         
@@ -730,27 +981,18 @@ int main(int argc, char* argv[]) {
         }
         
         // Track and print current row being played
-        if (g_state.playing) {
+        if (g_state.verbose && g_state.playing) {
             Uint32 tick = SDL_GetTicks();
             if (tick - last_row_check >= 50) {  // Check every 50ms
                 last_row_check = tick;
                 
-                // We need to track the current row in the SFX playback
-                // For now, estimate based on time
-                static Uint32 playback_start = 0;
-                if (playback_start == 0) playback_start = tick;
-                
-                Uint32 elapsed_ms = tick - playback_start;
-                float ms_per_row = (1000.0f / g_state.ticks_per_second) * g_state.ticks_per_row;
-                int estimated_row = (int)(elapsed_ms / ms_per_row) % g_state.song_num_rows;
-                
-                // Check if SFX finished (loop detection)
-                // When row wraps around, print the line
-                if (estimated_row != prev_sfx_row && estimated_row >= 0 && 
-                    estimated_row < (int)g_state.song_lines.size()) {
-                    std::cout << "\r\033[35m[ROW " << std::to_string(estimated_row) << "] " 
-                              << g_state.song_lines[estimated_row] << "\033[0m          " << std::flush;
-                    prev_sfx_row = estimated_row;
+                SDL_LockAudioDevice(g_audio_dev);
+                int row = xfm_song_get_row(g_state.music_module);
+                SDL_UnlockAudioDevice(g_audio_dev);
+                if (row != prev_song_row && row >= 0 && row < (int)g_state.song_lines.size()) {
+                    std::cout << "\r\033[35m[ROW " << std::to_string(row) << "] "
+                              << g_state.song_lines[row] << "\033[0m          " << std::flush;
+                    prev_song_row = row;
                 }
             }
         }
@@ -769,6 +1011,8 @@ int main(int argc, char* argv[]) {
     
     SDL_Quit();
     
-    std::cout << std::endl;
+    if (g_state.verbose) {
+        std::cout << std::endl;
+    }
     return 0;
 }

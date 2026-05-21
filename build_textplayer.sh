@@ -40,8 +40,7 @@ CXXFLAGS="-std=c++17 -Wall -Wextra -O2 -I. $SDL_CFLAGS $YMFM_INCLUDE"
 LDFLAGS="$SDL_LIBS -lm"
 
 # Source files
-# Note: xfm_export.cpp includes xfm_impl.cpp, so we don't include it separately
-SOURCES="xfm_textplayer.cpp xfm_export.cpp $YMFM_SOURCES"
+SOURCES="xfm_textplayer.cpp xfm_impl.cpp xfm_export.cpp $YMFM_SOURCES"
 
 # Output
 OUTPUT="xfm_textplayer"
@@ -53,5 +52,6 @@ $CXX $CXXFLAGS $SOURCES -o $OUTPUT $LDFLAGS
 echo ""
 echo "Build complete: ./$OUTPUT"
 echo ""
-echo "Usage: ./$OUTPUT <song.txt> <ticks_per_second> <ticks_per_row>"
+echo "Usage: ./$OUTPUT <song.txt> <ticks_per_second> <ticks_per_row> [--from-marker] [-v]"
 echo "Example: ./$OUTPUT song.txt 60 6"
+echo "Example range: ./$OUTPUT song.txt 60 6 --from-marker -v"

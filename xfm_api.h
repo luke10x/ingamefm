@@ -111,6 +111,17 @@ struct XfmActiveSfx {
     // Automatic note-off scheduling
     bool    auto_off_scheduled;
     int     auto_off_at_sample;
+
+    // Reserved runtime state for row effects. These are intentionally inert
+    // until effect parsing is added, but keep note transitions/effects on the
+    // same per-voice event path.
+    bool    legato_enabled;
+    bool    portamento_active;
+    int     portamento_target_note;
+    double  current_hz;
+    double  target_hz;
+    double  portamento_step_hz;
+    bool    live_patch_valid;
 };
 
 // Song channel event
@@ -134,6 +145,17 @@ struct XfmSongChannel {
     // For automatic OFF: when a new note arrives, previous note gets
     // keyed off at sample 1, and new note waits until end of row
     bool            wait_for_next_row;  // Delay keyon until next row starts
+
+    // Reserved runtime state for future effects. Legato, portamento, pitch
+    // slides, and per-operator patch edits should become scheduled row events
+    // that update this state before rendering the next chunk.
+    bool            legato_enabled;
+    bool            portamento_active;
+    int             portamento_target_note;
+    double          current_hz;
+    double          target_hz;
+    double          portamento_step_hz;
+    bool            live_patch_valid;
 };
 
 // Song pattern (multi-channel)
