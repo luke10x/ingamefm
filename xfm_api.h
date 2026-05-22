@@ -130,6 +130,45 @@ struct XfmSongOpnEffect {
     uint8_t value;
 };
 
+#define XFM_MAX_MACRO_VALUES 64
+#define XFM_MAX_MACROS 256
+#define XFM_MACRO_TARGET_COUNT 15
+
+typedef int xfm_macro_id;
+
+typedef enum {
+    XFM_MACRO_NONE = 0,
+    XFM_MACRO_TL1  = 1,
+    XFM_MACRO_TL2  = 2,
+    XFM_MACRO_TL3  = 3,
+    XFM_MACRO_TL4  = 4,
+    XFM_MACRO_MUL1 = 5,
+    XFM_MACRO_MUL2 = 6,
+    XFM_MACRO_MUL3 = 7,
+    XFM_MACRO_MUL4 = 8,
+    XFM_MACRO_DT1  = 9,
+    XFM_MACRO_DT2  = 10,
+    XFM_MACRO_DT3  = 11,
+    XFM_MACRO_DT4  = 12,
+    XFM_MACRO_FB   = 13,
+    XFM_MACRO_ARP  = 14
+} xfm_macro_target;
+
+struct XfmMacro {
+    uint8_t target;
+    int16_t values[XFM_MAX_MACRO_VALUES];
+    uint8_t length;
+    uint8_t loop_start;
+    uint8_t release_start;
+    bool has_loop;
+};
+
+struct XfmMacroState {
+    int macro_id;
+    uint8_t pos;
+    bool active;
+};
+
 struct XfmSongEvent {
     int     note;           // MIDI note, -1 = none, -2 = off
     int     patch_id;       // patch/instrument ID, -1 = inherit
@@ -143,6 +182,8 @@ struct XfmSongEvent {
     int     note_slide;     // <= -1000000 = no change, signed 0xxyy speed/semitones
     int     fine_pitch;     // -1 = no change, 0..255, 0x80 = neutral
     int     hard_reset;     // -1 = no change, 0 = off, 1 = on
+    int     macro_enable;   // -1 = no change, 0 = all, target id = enable
+    int     macro_disable;  // -1 = no change, 0 = all, target id = disable
     int     opn_effect_count;
     XfmSongOpnEffect opn_effects[16];
 };
@@ -186,6 +227,11 @@ struct XfmSongChannel {
     int             tremolo_depth;
     double          tremolo_phase;
     bool            envelope_hard_reset;
+    int             base_note;
+    int             arp_offset;
+    int             sample_in_tick;
+    uint32_t        macro_disabled_mask;
+    XfmMacroState   macro_states[XFM_MACRO_TARGET_COUNT];
     bool            live_patch_valid;
 };
 
@@ -424,6 +470,9 @@ struct xfm_module {
     // Patch storage (up to 256 patches)
     xfm_patch_opn    patches[256];
     bool            patch_present[256];
+    XfmMacro        macros[XFM_MAX_MACROS];
+    bool            macro_present[XFM_MAX_MACROS];
+    int             patch_macros[256][XFM_MACRO_TARGET_COUNT];
 
     // Voice pool (6 voices for OPN)
     XfmVoice         voices[6];
@@ -621,6 +670,34 @@ void xfm_patch_set(
     xfm_chip_type patch_type
 );
 
+/**
+ * Parse a compact integer macro sequence, e.g. "2 2 31 2 | 2 3 4".
+ *
+ * Values may be signed. A token may use repeat syntax: "12*4".
+ * The "|" token marks the loop start. Parsed data is independent of a module.
+ *
+ * @return 1 on success, 0 on parse/validation failure.
+ */
+int xfm_macro_parse(XfmMacro* out, uint8_t target, const char* sequence);
+
+/**
+ * Store a macro in the module macro bank.
+ *
+ * @param id Macro ID 0-255.
+ * @return id on success, -1 on failure.
+ */
+xfm_macro_id xfm_macro_set(xfm_module* m, xfm_macro_id id, const XfmMacro* macro);
+
+/**
+ * Assign a macro from the module macro bank to a patch target.
+ *
+ * The macro target controls what the sequence updates while the patch plays.
+ */
+void xfm_patch_macro_set(xfm_module* m, xfm_patch_id patch_id,
+                         uint8_t target, xfm_macro_id macro_id);
+
+void xfm_patch_macro_clear(xfm_module* m, xfm_patch_id patch_id, uint8_t target);
+
 /* =============================================================================
  * SONG DECLARATION
  * ============================================================================= */
@@ -757,6 +834,20 @@ xfm_voice_id xfm_sfx_play(
     xfm_sfx_id id,
     int priority
 );
+
+/**
+ * Stop a playing SFX voice.
+ *
+ * The voice id is the return value from xfm_sfx_play(). This releases the
+ * underlying chip channel and clears the SFX sequencer slot so it will not
+ * continue advancing rows after being stopped.
+ */
+void xfm_sfx_stop(xfm_module* m, xfm_voice_id voice);
+
+/**
+ * Stop all active SFX voices.
+ */
+void xfm_sfx_stop_all(xfm_module* m);
 
 /**
  * Trigger note.

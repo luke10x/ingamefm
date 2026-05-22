@@ -336,34 +336,11 @@ static int render_sfx_to_buffer(xfm_module* m, int sfx_id, int16_t* buffer, int 
     // Module is already fresh (reset before each SFX in adaptive_audio.h)
     // Do NOT reset state here - it would clear chip state after SFX declaration
 
-    // Directly set up SFX on voice 0 without going through xfm_sfx_play()
-    // This avoids voice stealing, priority logic, and state corruption
-    int voice = 0;
-    m->voices[voice].active = true;
-    m->voices[voice].sfx_id = sfx_id;
-    m->voices[voice].priority = 0;
-    m->voices[voice].age = ++m->voice_age_counter;
-    m->voices[voice].midi_note = -1;
-    m->voices[voice].patch_id = -1;
-    m->channel_active[voice] = false;
-    
-    m->active_sfx[voice].sfx_id = sfx_id;
-    m->active_sfx[voice].priority = 0;
-    m->active_sfx[voice].voice_idx = voice;
-    m->active_sfx[voice].current_row = 0;
-    m->active_sfx[voice].sample_in_row = 0;
-    m->active_sfx[voice].rows_remaining = num_rows;
-    m->active_sfx[voice].last_patch_id = -1;
-    m->active_sfx[voice].pending_has_note = false;
-    m->active_sfx[voice].pending_note = -1;
-    m->active_sfx[voice].pending_patch_id = -1;
-    m->active_sfx[voice].pending_gap = 0;  // No gap for export - render immediately
-    m->active_sfx[voice].active = true;
-    m->active_sfx[voice].auto_off_scheduled = false;
-    m->active_sfx[voice].auto_off_at_sample = 0;
-
-    // Process first row immediately to set up pending note
-    // (sfx_process_row is internal to xfm_impl.cpp, we need to call it via xfm_mix_sfx)
+    // Use the realtime SFX path so row 0 is processed immediately. This is
+    // important for long one-note SFX that hold over rest rows.
+    if (xfm_sfx_play(m, sfx_id, 0) == FM_VOICE_INVALID) {
+        return 0;
+    }
     
     // Render in chunks
     int frames_per_chunk = m->buffer_frames;
@@ -663,30 +640,13 @@ int xfm_export_sfx_begin(xfm_export_sfx_state* state, xfm_module* m, int sfx_id,
     }
     memset(buffer, 0, total_samples * 2 * sizeof(int16_t));
 
-    // Set up SFX on voice 0 (matches render_sfx_to_buffer)
-    int voice = 0;
-    m->voices[voice].active = true;
-    m->voices[voice].sfx_id = sfx_id;
-    m->voices[voice].priority = 0;
-    m->voices[voice].age = ++m->voice_age_counter;
-    m->voices[voice].midi_note = -1;
-    m->voices[voice].patch_id = -1;
-    m->channel_active[voice] = false;
-
-    m->active_sfx[voice].sfx_id = sfx_id;
-    m->active_sfx[voice].priority = 0;
-    m->active_sfx[voice].voice_idx = voice;
-    m->active_sfx[voice].current_row = 0;
-    m->active_sfx[voice].sample_in_row = 0;
-    m->active_sfx[voice].rows_remaining = num_rows;
-    m->active_sfx[voice].last_patch_id = -1;
-    m->active_sfx[voice].pending_has_note = false;
-    m->active_sfx[voice].pending_note = -1;
-    m->active_sfx[voice].pending_patch_id = -1;
-    m->active_sfx[voice].pending_gap = 0;
-    m->active_sfx[voice].active = true;
-    m->active_sfx[voice].auto_off_scheduled = false;
-    m->active_sfx[voice].auto_off_at_sample = 0;
+    // Use the realtime SFX path so row 0 is processed immediately. This keeps
+    // exported WAV SFX behavior aligned with synth playback.
+    if (xfm_sfx_play(m, sfx_id, 0) == FM_VOICE_INVALID) {
+        free(buffer);
+        fprintf(stderr, "xfm_export_sfx_begin: Failed to start SFX %d\n", sfx_id);
+        return -1;
+    }
 
     // Initialize state
     state->module = m;
