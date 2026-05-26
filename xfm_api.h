@@ -80,7 +80,7 @@ struct XfmVoice {
 
 // SFX pattern event (one row)
 struct XfmSfxEvent {
-    int     note;           // MIDI note, -1 = none, -2 = off
+    int     note;           // MIDI note, -1 = none, -2 = off, -3 = release, -4 = hard cut
     int     patch_id;       // patch/instrument ID, -1 = inherit
 };
 
@@ -167,10 +167,11 @@ struct XfmMacroState {
     int macro_id;
     uint8_t pos;
     bool active;
+    bool released;
 };
 
 struct XfmSongEvent {
-    int     note;           // MIDI note, -1 = none, -2 = off
+    int     note;           // MIDI note, -1 = none, -2 = off, -3 = release, -4 = hard cut
     int     patch_id;       // patch/instrument ID, -1 = inherit
     int     volume;         // volume 0-127, -1 = inherit
     int     legato;         // -1 = no change, 0 = off, 1 = on
@@ -251,6 +252,8 @@ struct XfmActiveSong {
     int             current_row;
     int             sample_in_row;
     int             rows_remaining;  // for loop tracking
+    int             loop_start_row;
+    int             loop_end_row;
     bool            active;
     bool            loop;
     XfmSongChannel   channels[6];
@@ -743,6 +746,14 @@ xfm_song_id xfm_song_declare(
  * @param loop true = loop indefinitely, false = play once
  */
 void xfm_song_play(xfm_module* m, xfm_song_id id, bool loop);
+
+/**
+ * Set the inclusive row range used when a looping song wraps.
+ *
+ * Passing the full song range restores normal whole-song looping. If the active
+ * playhead is outside the new range, it jumps to loop_start immediately.
+ */
+void xfm_song_set_loop_range(xfm_module* m, int loop_start, int loop_end);
 
 /**
  * Schedule a song change.
