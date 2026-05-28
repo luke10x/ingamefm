@@ -748,6 +748,14 @@ xfm_song_id xfm_song_declare(
 void xfm_song_play(xfm_module* m, xfm_song_id id, bool loop);
 
 /**
+ * Jump the active song playhead to a row.
+ *
+ * If no song is active this does nothing. The row is clamped to the declared
+ * song length and starts at the beginning of that row.
+ */
+void xfm_song_jump_to_row(xfm_module* m, int row);
+
+/**
  * Set the inclusive row range used when a looping song wraps.
  *
  * Passing the full song range restores normal whole-song looping. If the active

@@ -2063,6 +2063,11 @@ static void song_jump_to_row(xfm_module* m, int row)
     song_process_row(m, row);
 }
 
+void xfm_song_jump_to_row(xfm_module* m, int row)
+{
+    song_jump_to_row(m, row);
+}
+
 // Commit pending notes for active song (after gap samples)
 // If wait_for_next_row is set, keyon happens at end of row instead
 static void song_commit_keyon(xfm_module* m, int current_gap)
