@@ -126,6 +126,13 @@ void xfm_wav_unload(xfm_wav_module* m, xfm_wav_type type, int id);
 void xfm_wav_song_play(xfm_wav_module* m, int song_id, bool loop);
 
 /**
+ * @brief Stop the currently playing song.
+ *
+ * @param m Module instance
+ */
+void xfm_wav_song_stop(xfm_wav_module* m);
+
+/**
  * @brief Schedule song change
  *
  * @param m Module instance

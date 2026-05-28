@@ -345,6 +345,13 @@ void xfm_wav_song_play(xfm_wav_module* m, int song_id, bool loop)
     m->active_song.pending_set = false;
 }
 
+void xfm_wav_song_stop(xfm_wav_module* m)
+{
+    if (!m) return;
+    m->active_song.active = false;
+    m->active_song.pending_set = false;
+}
+
 void xfm_wav_song_schedule(xfm_wav_module* m, int song_id, xfm_wav_switch_timing timing)
 {
     if (!m || song_id < 1 || song_id > 15) return;
